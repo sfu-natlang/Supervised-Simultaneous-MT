@@ -14,3 +14,10 @@ python fairseq_cli/generate_action.py /path/to/datafolder/data-bin/wmt14_en_de/b
 --max-tokens 8000
 --beam 10 > /path/to/model/folder/nmt_trans_wmt14_deen_med/action_sequence.txt
 ```
+Then you can run
+
+```
+python scripts/sort-sentences.py /path/to/model/folder/nmt_trans_wmt14_deen_med/action_sequence.txt 5 > /path/to/model/folder/nmt_trans_wmt14_deen_med/action_sequence.lines.txt
+```
+
+to have a clean folder of action sequences for each sentence.
