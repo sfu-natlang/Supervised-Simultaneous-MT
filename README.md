@@ -5,7 +5,7 @@ You may need to run `pip install --editable .` first.
 In order to generate action sequences for Test set run the the following command:
 
 ```
-python fairseq_cli/generate_action.py /path/to/datafolder/data-bin/wmt14_en_de/bin-de_en-encoded
+python fairseq_cli/generate_action.py /path/to/datafolder/data-bin/wmt14_en_de/
 -s de
 -t en
 --user-dir ../examples/Supervised_simul_MT
