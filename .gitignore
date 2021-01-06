@@ -4,6 +4,10 @@
 # Build folder
 build/
 
+# My own model folders
+nmt_trans_wmt14_deen_med/
+nmt_trans_wmt14_ende_med/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
