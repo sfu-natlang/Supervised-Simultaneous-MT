@@ -1,5 +1,7 @@
 # Supervised Simultaneous Machine Translation
 
+You may need to run `pip install --editable .` first.
+
 In order to generate action sequences for Test set run the the following command:
 
 ```
