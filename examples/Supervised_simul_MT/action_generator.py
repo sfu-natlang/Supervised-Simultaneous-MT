@@ -170,7 +170,7 @@ class ActionGenerator(nn.Module):
         n_sent = sample_net_input['src_tokens'].shape[0]
         max_len = sample_net_input['src_tokens'].shape[1]
         for i in range(max_len - 1):
-            source_tokens = sample_net_input['src_tokens'][ : , : i+1]
+            source_tokens = sample_net_input['src_tokens'][:, : i+1]
 
             # Add EOS to unfinished sentences
             last_elements = torch.tensor([self.eos if element[-1] not in [self.eos, self.pad] else self.pad \
@@ -178,12 +178,14 @@ class ActionGenerator(nn.Module):
             source_tokens = torch.cat((source_tokens, torch.unsqueeze(last_elements, 1)), 1)
             new_net_input.append(
                 {'src_tokens': source_tokens,
-                 'src_lengths': torch.min(sample_net_input['src_lengths'], torch.tensor([i+2]*n_sent, device=source_tokens.device))}
+                 'src_lengths': torch.min(sample_net_input['src_lengths'],
+                                          torch.tensor([i + 2] * n_sent, device=source_tokens.device))}
             )
         incremental_sample['net_input'] = new_net_input
         return incremental_sample
 
     def prepare_post_process(self, src_token):
+        src_str = None
         src_tokens = utils.strip_pad(
             src_token, self.tgt_dict.pad()
         )
@@ -192,13 +194,14 @@ class ActionGenerator(nn.Module):
 
         return src_str
 
-    def generate_action_sequence(self, samples, net_input=None, post_process=True):
-        extended_samples = []
+    def generate_action_sequence(self, translations, net_input=None, post_process=True):
+        extended_translations = []
         src_tokens = net_input['src_tokens']
         src_lengths = net_input['src_lengths']
-        for index, sample in enumerate(samples):
-            extended_samples.append(self._generate_action_sequence(sample, src_tokens[index], src_lengths[index], post_process))
-        return extended_samples
+        for index, translation in enumerate(translations):
+            extended_translations.append(self._generate_action_sequence(translation, src_tokens[index],
+                                                                        src_lengths[index], post_process))
+        return extended_translations
 
     def _generate_action_sequence(self, sample, src_token, src_length, post_process):
         i, j = 0, 0
@@ -220,7 +223,7 @@ class ActionGenerator(nn.Module):
                     remove_bpe=None,
                     extra_symbols_to_ignore=None,
                 )
-                hypo_str = hypo_str.strip().split(' ')
+                hypo_str = hypo_str.strip().split(' ') + ['<EOS>']
                 subsets_generated[index]["hypo_str"] = hypo_str
             trg_Gen = hypo_str
             trg_length = len(trg_Gen)
@@ -230,18 +233,17 @@ class ActionGenerator(nn.Module):
             if i < len(subset) and subset[i] == trg_Gen[i]:
                 action_seq.append(1)
                 i = i + 1
-            else:
+            elif j + 1 < src_length:
                 action_seq.append(0)
-                if j < len(subsets_generated):
-                    j = j + 1
+                j = j + 1
         # Debug
-        if j + 1 < src_length - 1:
+        if j + 1 < src_length:
             print("WARNING --> Some zeros added")
-            while j + 1 < src_length - 1:
+            while j + 1 < src_length:
                 action_seq.append(0)
                 j = j + 1
 
-        assert ( src_length - 1 + trg_length == len(action_seq) ), [src_length - 1, trg_length, len(action_seq)]
+        assert (src_length + trg_length == len(action_seq)), [src_length, trg_length, len(action_seq)]
         extended_sample = sample[-1][0]
         extended_sample['action_seq'] = action_seq
         return extended_sample
@@ -262,7 +264,7 @@ class ActionGenerator(nn.Module):
         """
         incremental_samples = self.prepare_incremental_samples(sample)
         translations = torch.zeros(sample['net_input']['src_tokens'].shape[1])
-        for i in range(sample['net_input']['src_tokens'].shape[1]-1):
+        for i in range(sample['net_input']['src_tokens'].shape[1] - 1):
             # if i < 2:
             print(i)
             subsample = {
@@ -331,7 +333,7 @@ class ActionGenerator(nn.Module):
                 int(self.max_len_a * src_len + self.max_len_b),
                 # exclude the EOS marker
                 self.model.max_decoder_positions() - 1,
-                )
+            )
         assert (
                 self.min_len <= max_len
         ), "min_len cannot be larger than max_len, please adjust these!"
@@ -339,7 +341,7 @@ class ActionGenerator(nn.Module):
         # encoder_input = {
         #     k: v for k, v in net_input.items() if k != "prev_output_tokens"
         # }
-#        net_output = self.model(net_input)
+        #        net_output = self.model(net_input)
 
         # compute the encoder output for each beam
         encoder_outs = self.model.forward_encoder(net_input)
@@ -439,7 +441,7 @@ class ActionGenerator(nn.Module):
             # handle max length constraint
             if step >= max_len:
                 lprobs[:, : self.eos] = -math.inf
-                lprobs[:, self.eos + 1 :] = -math.inf
+                lprobs[:, self.eos + 1:] = -math.inf
 
             # handle prefix tokens (possibly with different lengths)
             if (
@@ -580,7 +582,7 @@ class ActionGenerator(nn.Module):
             active_mask = torch.add(
                 eos_mask.type_as(cand_offsets) * cand_size,
                 cand_offsets[: eos_mask.size(1)],
-                )
+            )
 
             # get the top beam_size active hypotheses, which are just
             # the hypos with the smallest values in active_mask.
@@ -665,7 +667,7 @@ class ActionGenerator(nn.Module):
         if eos_mask.any():
             # validate that the first beam matches the prefix
             first_beam = tokens[eos_mask].view(-1, beam_size, tokens.size(-1))[
-                         :, 0, 1 : step + 1
+                         :, 0, 1: step + 1
                          ]
             eos_mask_batch_dim = eos_mask.view(-1, beam_size)[:, 0]
             target_prefix = prefix_tokens[eos_mask_batch_dim][:, :step]
@@ -710,12 +712,12 @@ class ActionGenerator(nn.Module):
         # tokens is (batch * beam, max_len). So the index_select
         # gets the newly EOS rows, then selects cols 1..{step + 2}
         tokens_clone = tokens.index_select(0, bbsz_idx)[
-                       :, 1 : step + 2
+                       :, 1: step + 2
                        ]  # skip the first index, which is EOS
 
         tokens_clone[:, step] = self.eos
         attn_clone = (
-            attn.index_select(0, bbsz_idx)[:, :, 1 : step + 2]
+            attn.index_select(0, bbsz_idx)[:, :, 1: step + 2]
             if attn is not None
             else None
         )
@@ -827,7 +829,7 @@ class ActionGenerator(nn.Module):
             bbsz_idx: int,
     ):
         tokens_list: List[int] = tokens[
-                                 bbsz_idx, step + 2 - no_repeat_ngram_size : step + 1
+                                 bbsz_idx, step + 2 - no_repeat_ngram_size: step + 1
                                  ].tolist()
         # before decoding the next token, prevent decoding of ngrams that have already appeared
         ngram_index = ",".join([str(x) for x in tokens_list])
