@@ -161,25 +161,25 @@ class ActionGenerator(nn.Module):
                 )
                 yield id, src, ref, hypos[i]
 
-    def prepare_incremental_samples(self, sample):
+    def extract_incremental_samples(self, sample):
         incremental_sample = {
             k: v for k, v in sample.items() if k != "net_input"
         }
         new_net_input = []
         sample_net_input = sample['net_input']
-        n_sent = sample_net_input['src_tokens'].shape[0]
         max_len = sample_net_input['src_tokens'].shape[1]
         for i in range(max_len - 1):
-            source_tokens = sample_net_input['src_tokens'][:, : i+1]
+            num_undone = (sample_net_input['src_lengths'] > i).sum()
+            source_tokens = sample_net_input['src_tokens'][:num_undone, : i+1]
 
             # Add EOS to unfinished sentences
-            last_elements = torch.tensor([self.eos if element[-1] not in [self.eos, self.pad] else self.pad \
+            last_elements = torch.tensor([self.eos if element[-1] not in [self.eos, self.pad] else self.pad
                                           for element in source_tokens], device=source_tokens.device)
             source_tokens = torch.cat((source_tokens, torch.unsqueeze(last_elements, 1)), 1)
             new_net_input.append(
                 {'src_tokens': source_tokens,
-                 'src_lengths': torch.min(sample_net_input['src_lengths'],
-                                          torch.tensor([i + 2] * n_sent, device=source_tokens.device))}
+                 'src_lengths': torch.min(sample_net_input['src_lengths'][:num_undone],
+                                          torch.tensor([i + 2] * num_undone, device=source_tokens.device))}
             )
         incremental_sample['net_input'] = new_net_input
         return incremental_sample
@@ -262,7 +262,7 @@ class ActionGenerator(nn.Module):
             bos_token (int, optional): beginning of sentence token
                 (default: self.eos)
         """
-        incremental_samples = self.prepare_incremental_samples(sample)
+        incremental_samples = self.extract_incremental_samples(sample)
         translations = torch.zeros(sample['net_input']['src_tokens'].shape[1])
         for i in range(sample['net_input']['src_tokens'].shape[1] - 1):
             # if i < 2:
