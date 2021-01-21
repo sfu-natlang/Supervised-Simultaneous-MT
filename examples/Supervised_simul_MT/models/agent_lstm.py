@@ -169,14 +169,14 @@ class AgentLSTMModel(FairseqEncoderDecoderModel):
             max_source_positions=max_source_positions,
         )
         decoder = LSTMDecoder(
-            dictionary=task.target_dictionary,
+            dictionary=task.agent_dictionary,
             embed_dim=args.decoder_embed_dim,
             hidden_size=args.decoder_hidden_size,
             out_embed_dim=args.decoder_out_embed_dim,
             num_layers=args.decoder_layers,
             dropout_in=args.decoder_dropout_in,
             dropout_out=args.decoder_dropout_out,
-            attention=utils.eval_bool(args.decoder_attention),
+            attention=False, # utils.eval_bool(args.decoder_attention),
             encoder_output_units=encoder.output_units,
             pretrained_embed=pretrained_decoder_embed,
             share_input_output_embed=args.share_decoder_input_output_embed,

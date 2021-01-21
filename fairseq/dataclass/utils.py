@@ -49,9 +49,9 @@ def interpret_dc_type(field_type):
 
 
 def gen_parser_from_dataclass(
-    parser: ArgumentParser,
-    dataclass_instance: FairseqDataclass,
-    delete_default: bool = False,
+        parser: ArgumentParser,
+        dataclass_instance: FairseqDataclass,
+        delete_default: bool = False,
 ) -> None:
     """convert a dataclass instance to tailing parser arguments"""
 
@@ -65,7 +65,7 @@ def gen_parser_from_dataclass(
         return "--" + name.replace("_", "-")
 
     def get_kwargs_from_dc(
-        dataclass_instance: FairseqDataclass, k: str
+            dataclass_instance: FairseqDataclass, k: str
     ) -> Dict[str, Any]:
         """k: dataclass attributes"""
 
@@ -92,8 +92,8 @@ def gen_parser_from_dataclass(
             if field_choices is not None:
                 kwargs["choices"] = field_choices
             if (
-                isinstance(inter_type, type)
-                and (issubclass(inter_type, List) or issubclass(inter_type, Tuple))
+                    isinstance(inter_type, type)
+                    and (issubclass(inter_type, List) or issubclass(inter_type, Tuple))
             ) or ("List" in str(inter_type) or "Tuple" in str(inter_type)):
                 if "int" in str(inter_type):
                     kwargs["type"] = lambda x: eval_str_list(x, int)
@@ -112,7 +112,7 @@ def gen_parser_from_dataclass(
                         else None
                     )
             elif (
-                isinstance(inter_type, type) and issubclass(inter_type, Enum)
+                    isinstance(inter_type, type) and issubclass(inter_type, Enum)
             ) or "Enum" in str(inter_type):
                 kwargs["type"] = str
                 if field_default is not MISSING:
@@ -155,7 +155,7 @@ def gen_parser_from_dataclass(
 
         if "default" in kwargs:
             if isinstance(kwargs["default"], str) and kwargs["default"].startswith(
-                "${"
+                    "${"
             ):
                 if kwargs["help"] is None:
                     # this is a field with a name that will be added elsewhere
@@ -194,7 +194,7 @@ def _set_legacy_defaults(args, cls):
 
 
 def _override_attr(
-    sub_node: str, data_class: Type[FairseqDataclass], args: Namespace
+        sub_node: str, data_class: Type[FairseqDataclass], args: Namespace
 ) -> List[str]:
     overrides = []
 
@@ -215,12 +215,12 @@ def _override_attr(
 
         field_type = interpret_dc_type(v.type)
         if (
-            isinstance(val, str)
-            and not val.startswith("${")  # not interpolation
-            and field_type != str
-            and (
+                isinstance(val, str)
+                and not val.startswith("${")  # not interpolation
+                and field_type != str
+                and (
                 not inspect.isclass(field_type) or not issubclass(field_type, Enum)
-            )  # not choices enum
+        )  # not choices enum
         ):
             # upgrade old models that stored complex parameters as string
             val = ast.literal_eval(val)
@@ -230,9 +230,9 @@ def _override_attr(
 
         v_type = getattr(v.type, "__origin__", None)
         if (
-            (v_type is List or v_type is list)
-            # skip interpolation
-            and not (isinstance(val, str) and val.startswith("${"))
+                (v_type is List or v_type is list)
+                # skip interpolation
+                and not (isinstance(val, str) and val.startswith("${"))
         ):
             # if type is int but val is float, then we will crash later - try to convert here
             t_args = v.type.__args__
@@ -242,7 +242,7 @@ def _override_attr(
             try:
                 val = field_type(val)
             except:
-                pass # ignore errors here, they are often from interpolation args
+                pass  # ignore errors here, they are often from interpolation args
 
         if val is None:
             overrides.append("{}.{}=null".format(sub_node, k))
@@ -264,7 +264,7 @@ def _override_attr(
 
 
 def migrate_registry(
-    name, value, registry, args, overrides, deletes, use_name_as_val=False
+        name, value, registry, args, overrides, deletes, use_name_as_val=False
 ):
     if value in registry:
         overrides.append("{}={}".format(name, value))
@@ -336,6 +336,40 @@ def override_module_args(args: Namespace) -> Tuple[List[str], List[str]]:
     return overrides, deletes
 
 
+'''
+def extend_override_module(overrides):
+    extension = {
+    nmt_task._name:'Supervised_simultaneous_translation',
+    all_gather_list_size=16384,
+    azureml_logging=False,
+    batch_size=None,
+    batch_size_valid=None,
+    beam=2,
+    best_checkpoint_metric='loss',
+    bf16=False,
+    bpe=None,
+    broadcast_buffers=False,
+    bucket_cap_mb=25,
+    checkpoint_shard_count=1,
+    checkpoint_suffix='',
+    constraints=None,
+    cpu=False,
+    criterion='cross_entropy',
+    curriculum=0,
+    data='/Users/alinejad/Desktop/SFU/Research/Speech-to-text-transation/Supervised-fairseq/data-bin/wmt14_en_de/bin-de_en-encoded',
+    data_buffer_size=10,
+    dataset_impl=None,
+    ddp_backend='c10d',
+    decoding_format=None,
+    disable_validation=False,
+    distributed_backend='nccl',
+    distributed_init_method=None,
+    distributed_no_spawn=False,
+    distributed_port=-1, distributed_rank=0, distributed_world_size=1, distributed_wrapper='DDP', diverse_beam_groups=-1, diverse_beam_strength=0.5, diversity_rate=-1.0, empty_cache_freq=0, eos=2, eval_bleu=False, eval_bleu_args=None, eval_bleu_detok='space', eval_bleu_detok_args=None, eval_bleu_print_samples=False, eval_bleu_remove_bpe=None, eval_tokenized_bleu=False, fast_stat_sync=False, find_unused_parameters=False, finetune_from_model=None, fix_batches_to_gpus=False, fixed_validation_seed=None, force_anneal=None, fp16=False, fp16_init_scale=128, fp16_no_flatten_grads=False, fp16_scale_tolerance=0.0, fp16_scale_window=None, gen_subset='valid', iter_decode_eos_penalty=0.0, iter_decode_force_max_iter=False, iter_decode_max_iter=10, iter_decode_with_beam=1, iter_decode_with_external_reranker=False, keep_best_checkpoints=-1, keep_interval_updates=-1, keep_last_epochs=-1, left_pad_source='False', left_pad_target='False', lenpen=1, lm_path=None, lm_weight=0.0, load_alignments=False, load_checkpoint_on_all_dp_ranks=False, localsgd_frequency=3, log_format=None, log_interval=100, lr_scheduler='fixed', lr_shrink=0.1, match_source_len=False, max_len_a=0, max_len_b=200, max_source_positions=1024, max_target_positions=1024, max_tokens=8000, max_tokens_valid=8000, maximize_best_checkpoint_metric=False, memory_efficient_bf16=False, memory_efficient_fp16=False, min_len=1, min_loss_scale=0.0001, model_overrides='{}', model_parallel_size=1, nbest=1, no_beamable_mm=False, no_early_stop=False, no_epoch_checkpoints=False, no_last_checkpoints=False, no_progress_bar=False, no_repeat_ngram_size=0, no_save=False, no_save_optimizer_state=False, no_seed_provided=False, nprocs_per_node=1, num_batch_buckets=0, num_shards=1, num_workers=1, optimizer=None, optimizer_overrides='{}', pad=1, path='/Users/alinejad/Desktop/SFU/Research/Speech-to-text-transation/Supervised-fairseq/nmt_trans_wmt14_deen_med/checkpoint_best.pt', patience=-1, pipeline_balance=None, pipeline_checkpoint='never', pipeline_chunks=0, pipeline_decoder_balance=None, pipeline_decoder_devices=None, pipeline_devices=None, pipeline_encoder_balance=None, pipeline_encoder_devices=None, pipeline_model_parallel=False, post_process=None, prefix_size=0, print_alignment=None, print_step=False, profile=False, quantization_config_path=None, quiet=False, replace_unk=None, required_batch_size_multiple=8, required_seq_len_multiple=1, reset_dataloader=False, reset_logging=True, reset_lr_scheduler=False, reset_meters=False, reset_optimizer=False, restore_file='checkpoint_last.pt', results_path=None, retain_dropout=False, retain_dropout_modules=None, retain_iter_history=False, sacrebleu=False, sampling=False, sampling_topk=-1, sampling_topp=-1.0, save_dir='checkpoints', save_interval=1, save_interval_updates=0, score_reference=False, scoring='bleu', seed=1, shard_id=0, skip_invalid_size_inputs_valid_test=True, slowmo_algorithm='LocalSGD', slowmo_momentum=None, source_lang='de', target_lang='en', task='Supervised_simultaneous_translation', temperature=1.0, tensorboard_logdir=None, threshold_loss_scale=None, tokenizer=None, tpu=False, train_subset='train', truncate_source=False, unk=3, unkpen=0, unnormalized=False, upsample_primary=1, user_dir='../examples/Supervised_simul_MT', valid_subset='valid', validate_after_updates=0, validate_interval=1, validate_interval_updates=0, wandb_project=None, warmup_updates=0, zero_sharding='none')
+    }
+'''
+
+
 def convert_namespace_to_omegaconf(args: Namespace) -> DictConfig:
     """Convert a flat argparse.Namespace to a structured DictConfig."""
 
@@ -347,15 +381,24 @@ def convert_namespace_to_omegaconf(args: Namespace) -> DictConfig:
 
     GlobalHydra.instance().clear()
 
-    with initialize(config_path=config_path):
-        try:
-            composed_cfg = compose("config", overrides=overrides, strict=False)
-        except:
-            logger.error("Error when composing. Overrides: " + str(overrides))
-            raise
-
-        for k in deletes:
-            composed_cfg[k] = None
+    if getattr(args, "task", None) == 'Supervised_simultaneous_translation':
+        with initialize(config_path=config_path):
+            try:
+                composed_cfg = compose("simultaneous_config", overrides=overrides, strict=False)
+            except:
+                logger.error("Error when composing. Overrides: " + str(overrides))
+                raise
+            for k in deletes:
+                composed_cfg[k] = None
+    else:
+        with initialize(config_path=config_path):
+            try:
+                composed_cfg = compose("config", overrides=overrides, strict=False)
+            except:
+                logger.error("Error when composing. Overrides: " + str(overrides))
+                raise
+            for k in deletes:
+                composed_cfg[k] = None
 
     cfg = OmegaConf.create(
         OmegaConf.to_container(composed_cfg, resolve=True, enum_to_str=True)
@@ -405,8 +448,8 @@ def convert_namespace_to_omegaconf(args: Namespace) -> DictConfig:
 
 
 def populate_dataclass(
-    dataclass: FairseqDataclass,
-    args: Namespace,
+        dataclass: FairseqDataclass,
+        args: Namespace,
 ) -> FairseqDataclass:
     for k in dataclass.__dataclass_fields__.keys():
         if k.startswith("_"):
@@ -433,8 +476,8 @@ def overwrite_args_by_name(cfg: DictConfig, overrides: Dict[str, any]):
                     setattr(cfg[k], override_key, val)
             elif k in overrides:
                 if (
-                    k in REGISTRIES
-                    and overrides[k] in REGISTRIES[k]["dataclass_registry"]
+                        k in REGISTRIES
+                        and overrides[k] in REGISTRIES[k]["dataclass_registry"]
                 ):
                     cfg[k] = DictConfig(
                         REGISTRIES[k]["dataclass_registry"][overrides[k]]
