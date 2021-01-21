@@ -245,7 +245,9 @@ class ActionGenerator(nn.Module):
 
         assert (src_length + trg_length == len(action_seq)), [src_length, trg_length, len(action_seq)]
         extended_sample = sample[-1][0]
+        extended_sample['src_tokens'] = src_token
         extended_sample['action_seq'] = action_seq
+        extended_sample['subsets'] = subsets_generated
         return extended_sample
 
     @torch.no_grad()
@@ -266,11 +268,11 @@ class ActionGenerator(nn.Module):
         translations = torch.zeros(sample['net_input']['src_tokens'].shape[1])
         for i in range(sample['net_input']['src_tokens'].shape[1] - 1):
             # if i < 2:
-            print(i)
             subsample = {
                 k: v for k, v in sample.items() if k != "net_input"
             }
             subsample['net_input'] = incremental_samples['net_input'][i]
+            print(len(subsample['net_input']['src_lengths']))
             partial_translation = self._generate(subsample, **kwargs)
             if i == 0:
                 translations = [[partial] for partial in partial_translation]

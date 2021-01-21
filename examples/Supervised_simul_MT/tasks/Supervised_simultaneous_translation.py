@@ -6,8 +6,9 @@
 import itertools
 import logging
 import os
+import torch
 
-from fairseq import search
+from fairseq import search, checkpoint_utils, utils
 from fairseq.data import (
     AppendTokenDataset,
     ConcatDataset,
@@ -16,16 +17,15 @@ from fairseq.data import (
     StripTokenDataset,
     TruncateDataset,
     data_utils,
-    encoders,
     indexed_dataset,
+    Dictionary,
 )
 
-from fairseq.tasks import register_task
+from fairseq import tasks
+from fairseq.tasks import register_task, fairseq_task
 from fairseq.tasks.translation import TranslationTask
 
-
 EVAL_BLEU_ORDER = 4
-
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +83,7 @@ def load_langpair_dataset(
                 TruncateDataset(
                     StripTokenDataset(src_dataset, src_dict.eos()),
                     max_source_positions - 1,
-                    ),
+                ),
                 src_dict.eos(),
             )
         src_datasets.append(src_dataset)
@@ -236,6 +236,22 @@ class SupervisedSimulTranslationTask(TranslationTask):
 
     def __init__(self, args, src_dict, tgt_dict):
         super().__init__(args, src_dict, tgt_dict)
+        self.agent_dictionary = None
+
+    @classmethod
+    def setup_task(cls, args, **kwargs):
+        """Setup the task (e.g., load dictionaries).
+
+        Args:
+            args (argparse.Namespace): parsed command-line arguments
+        """
+        task = super().setup_task(args)
+        paths = utils.split_paths(args.data)
+        #agent_dict = Dictionary()
+        task.agent_dictionary = cls.load_dictionary(
+            os.path.join(paths[0], "dict.agent.txt".format(args.source_lang))
+        )
+        return task
 
     def build_action_generator(
             self, models, args, seq_gen_cls=None, extra_gen_cls_kwargs=None
@@ -331,3 +347,36 @@ class SupervisedSimulTranslationTask(TranslationTask):
             search_strategy=search_strategy,
             **extra_gen_cls_kwargs,
         )
+
+    def train_step(
+            self, sample, model, criterion, optimizer, update_num, ignore_grad=False
+    ):
+        """
+        Do forward and backward, and return the loss as computed by *criterion*
+        for the given *model* and *sample*.
+
+        Args:
+            sample (dict): the mini-batch. The format is defined by the
+                :class:`~fairseq.data.FairseqDataset`.
+            model (~fairseq.models.BaseFairseqModel): the model
+            criterion (~fairseq.criterions.FairseqCriterion): the criterion
+            optimizer (~fairseq.optim.FairseqOptimizer): the optimizer
+            update_num (int): the current update
+            ignore_grad (bool): multiply loss by 0 if this is set to True
+
+        Returns:
+            tuple:
+                - the loss
+                - the sample size, which is used as the denominator for the
+                  gradient
+                - logging outputs to display while training
+        """
+        model.train()
+        model.set_num_updates(update_num)
+        with torch.autograd.profiler.record_function("forward"):
+            loss, sample_size, logging_output = criterion(model, sample)
+        if ignore_grad:
+            loss *= 0
+        with torch.autograd.profiler.record_function("backward"):
+            optimizer.backward(loss)
+        return loss, sample_size, logging_output

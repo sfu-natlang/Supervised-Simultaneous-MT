@@ -63,6 +63,7 @@ def main(cfg: DictConfig) -> None:
     logger.info(cfg)
 
     # Setup task, e.g., translation, language modeling, etc.
+
     task = tasks.setup_task(cfg.task)
     # Load valid dataset (we load training data below, based on the latest checkpoint)
     for valid_sub_split in cfg.dataset.valid_subset.split(","):

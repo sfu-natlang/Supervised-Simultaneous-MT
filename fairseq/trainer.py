@@ -13,16 +13,17 @@ import sys
 import time
 from argparse import Namespace
 from itertools import chain
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Union
 
 import torch
-from fairseq import checkpoint_utils, distributed_utils, models, optim, utils
+from fairseq import checkpoint_utils, distributed_utils, models, optim, utils, tasks
 from fairseq.dataclass.configs import FairseqConfig
 from fairseq.dataclass.utils import convert_namespace_to_omegaconf
 from fairseq.file_io import PathManager
 from fairseq.logging import meters, metrics
 from fairseq.nan_detector import NanDetector
 from fairseq.optim import lr_scheduler
+from examples.Supervised_simul_MT.data import agent_utils
 
 
 logger = logging.getLogger(__name__)
@@ -128,6 +129,29 @@ class Trainer(object):
         self._start_time = time.time()
         self._previous_training_time = 0
         self._cumulative_training_time = None
+
+        if self.task.args._name == 'Supervised_simultaneous_translation':
+            nmt_task = tasks.setup_task(cfg.nmt_task)
+            self.nmt_model, _args = checkpoint_utils.load_model_ensemble(
+                utils.split_paths(cfg.nmt_task.path),
+                arg_overrides={},
+                task=nmt_task,
+                suffix='',
+                strict=True,
+                num_shards=1,
+            )
+            for model in chain(self.nmt_model, [None]):
+                if model is None:
+                    continue
+                if cfg.common.fp16:
+                    model.half()
+                if self.cuda and not cfg.distributed_training.pipeline_model_parallel:
+                    model.cuda()
+                model.prepare_for_inference_(cfg)
+                cfg.nmt_task.constraints = False
+            self.generator = nmt_task.build_action_generator(
+                self.nmt_model, cfg.nmt_task, extra_gen_cls_kwargs=None
+            )
 
     def reinitialize(self):
         """Reinitialize the Trainer, typically after model params change."""
@@ -492,7 +516,7 @@ class Trainer(object):
         self.task.begin_valid_epoch(epoch, self.get_model())
 
     def reset_dummy_batch(self, batch):
-        self._dummy_batch = batch
+        self._dummy_batch = batchs
 
     @metrics.aggregate("train")
     def train_step(self, samples, raise_oom=False):
@@ -527,6 +551,21 @@ class Trainer(object):
             try:
                 with maybe_no_sync():
                     # forward and backward
+
+                    if self.task.args._name == 'Supervised_simultaneous_translation':
+                        prefix_tokens = None
+                        constraints = None
+                        if "constraints" in sample:
+                            constraints = sample["constraints"]
+                        with torch.no_grad():
+                            hypos = self.generator.generate(
+                                self.nmt_model, sample, prefix_tokens=prefix_tokens, constraints=constraints
+                            )
+                        sample = agent_utils.prepare_simultaneous_input(hypos, sample,
+                                                                        self.task.source_dictionary,
+                                                                        self.task.target_dictionary,
+                                                                        self.task.agent_dictionary)
+
                     loss, sample_size_i, logging_output = self.task.train_step(
                         sample=sample,
                         model=self.model,
