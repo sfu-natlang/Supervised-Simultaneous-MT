@@ -265,7 +265,7 @@ class ActionGenerator(nn.Module):
                 (default: self.eos)
         """
         incremental_samples = self.extract_incremental_samples(sample)
-        translations = torch.zeros(sample['net_input']['src_tokens'].shape[1])
+        # translations = torch.zeros(sample['net_input']['src_tokens'].shape[1])
         for i in range(sample['net_input']['src_tokens'].shape[1] - 1):
             # if i < 2:
             subsample = {
@@ -279,6 +279,11 @@ class ActionGenerator(nn.Module):
             else:
                 for index, trans in enumerate(partial_translation):
                     translations[index].append(trans)
+
+        # If all sents in sample contains only EOS token it does not go through the above loop
+        if sample['net_input']['src_tokens'].shape[1] == 1:
+            partial_translation = self._generate(sample, **kwargs)
+            translations = [[partial] for partial in partial_translation]
 
         return self.generate_action_sequence(translations, sample['net_input'])
 
