@@ -87,6 +87,10 @@ class ActionGenerator(nn.Module):
         self.temperature = temperature
         self.match_source_len = match_source_len
         self.no_repeat_ngram_size = no_repeat_ngram_size
+
+        # If True then _generate() returns Encoder and Decoder outputs as well.
+        self.all_features = False
+
         assert temperature > 0, "--temperature must be greater than 0"
 
         self.search = (
@@ -167,6 +171,14 @@ class ActionGenerator(nn.Module):
         }
         new_net_input = []
         sample_net_input = sample['net_input']
+
+        # If the first element of a sample is pad, replace it with unk. (We'll get errors when generating translations)
+        first = sample_net_input['src_tokens'][:, 0]
+        if self.pad in sample_net_input['src_tokens'][:, 0]:
+            for batch_index in range(sample_net_input['src_tokens'].shape[0]):
+                if sample_net_input['src_tokens'][batch_index, 0] == self.pad:
+                    sample_net_input['src_tokens'][batch_index, 0] = self.unk
+
         max_len = sample_net_input['src_tokens'].shape[1]
         for i in range(max_len - 1):
             num_undone = (sample_net_input['src_lengths'] > i).sum()
@@ -273,6 +285,7 @@ class ActionGenerator(nn.Module):
             }
             subsample['net_input'] = incremental_samples['net_input'][i]
             print(len(subsample['net_input']['src_lengths']))
+            self.all_features = True
             partial_translation = self._generate(subsample, **kwargs)
             if i == 0:
                 translations = [[partial] for partial in partial_translation]
@@ -356,6 +369,7 @@ class ActionGenerator(nn.Module):
         # placeholder of indices for bsz * beam_size to hold tokens and accumulative scores
         new_order = torch.arange(bsz).view(-1, 1).repeat(1, beam_size).view(-1)
         new_order = new_order.to(src_tokens.device).long()
+        orig_encoder_out = encoder_outs
         encoder_outs = self.model.reorder_encoder_out(encoder_outs, new_order)
         # ensure encoder_outs is a List.
         assert encoder_outs is not None
@@ -372,6 +386,7 @@ class ActionGenerator(nn.Module):
         )  # +2 for eos and pad
         tokens[:, 0] = self.eos if bos_token is None else bos_token
         attn: Optional[Tensor] = None
+        decoder_out: Optional[Tensor] = None
 
         # A list that indicates candidates that should be ignored.
         # For example, suppose we're sampling and have already finalized 2/5
@@ -432,6 +447,13 @@ class ActionGenerator(nn.Module):
                 self.temperature,
             )
 
+            if self.all_features:
+                decoder_out_scores = self.model.forward_decoder_features_only(
+                    tokens[:, : step + 1],
+                    encoder_outs,
+                    incremental_states,
+                )
+
             if self.lm_model is not None:
                 lm_out = self.lm_model(tokens[:, : step + 1])
                 probs = self.lm_model.get_normalized_probs(
@@ -470,6 +492,13 @@ class ActionGenerator(nn.Module):
                         bsz * beam_size, avg_attn_scores.size(1), max_len + 2
                     ).to(scores)
                 attn[:, :, step + 1].copy_(avg_attn_scores)
+
+            if self.all_features:
+                if decoder_out is None:
+                    decoder_out = torch.empty(
+                        bsz * beam_size, max_len + 2, decoder_out_scores.size(2)
+                    ).to(scores)
+                decoder_out[:, step + 1, :] = decoder_out_scores[:, 0, :]
 
             scores = scores.type_as(lprobs)
             eos_bbsz_idx = torch.empty(0).to(
@@ -527,6 +556,8 @@ class ActionGenerator(nn.Module):
                     finished,
                     beam_size,
                     attn,
+                    encoder_outs,
+                    decoder_out,
                     src_lengths,
                     max_len,
                 )
@@ -574,6 +605,10 @@ class ActionGenerator(nn.Module):
                 if attn is not None:
                     attn = attn.view(bsz, -1)[batch_idxs].view(
                         new_bsz * beam_size, attn.size(1), -1
+                    )
+                if decoder_out is not None:
+                    decoder_out = decoder_out.view(bsz, -1)[batch_idxs].view(
+                        new_bsz * beam_size, decoder_out.size(1), -1
                     )
                 bsz = new_bsz
             else:
@@ -642,6 +677,11 @@ class ActionGenerator(nn.Module):
                     attn[:, :, : step + 2], dim=0, index=active_bbsz_idx
                 )
 
+            if decoder_out is not None:
+                decoder_out[:, :step + 2, :] = torch.index_select(
+                    decoder_out[:, : step + 2, ], dim=0, index=active_bbsz_idx
+                )
+
             # reorder incremental state in decoder
             reorder_state = active_bbsz_idx
 
@@ -702,6 +742,8 @@ class ActionGenerator(nn.Module):
             finished: List[bool],
             beam_size: int,
             attn: Optional[Tensor],
+            encoder_out:Optional[Tensor],
+            decoder_out:Optional[Tensor],
             src_lengths,
             max_len: int,
     ):
@@ -726,6 +768,11 @@ class ActionGenerator(nn.Module):
         attn_clone = (
             attn.index_select(0, bbsz_idx)[:, :, 1: step + 2]
             if attn is not None
+            else None
+        )
+        decoder_out_clone = (
+            decoder_out.index_select(0, bbsz_idx)[:, 1: step + 2, :]
+            if decoder_out is not None
             else None
         )
 
@@ -784,11 +831,21 @@ class ActionGenerator(nn.Module):
                 else:
                     hypo_attn = torch.empty(0)
 
+                if self.all_features:
+                    hypo_encoder_out = encoder_out[0]['encoder_out'][0][:, i, :]
+                    hypo_decoder_out = decoder_out_clone[i]
+                else:
+                    hypo_encoder_out = torch.empty(0)
+                    hypo_decoder_out = torch.empty(0)
+
+
                 finalized[sent].append(
                     {
                         "tokens": tokens_clone[i],
                         "score": score,
-                        "attention": hypo_attn,  # src_len x tgt_len
+                        "attention": hypo_attn, # src_len x tgt_len
+                        "encoder_out": hypo_encoder_out,
+                        "decoder_out": hypo_decoder_out,
                         "alignment": torch.empty(0),
                         "positional_scores": pos_scores[i],
                     }
@@ -983,6 +1040,30 @@ class EnsembleModel(nn.Module):
         if avg_attn is not None:
             avg_attn.div_(self.models_size)
         return avg_probs, avg_attn
+
+    @torch.jit.export
+    def forward_decoder_features_only(
+            self,
+            tokens,
+            encoder_outs: List[Dict[str, List[Tensor]]],
+            incremental_states: List[Dict[str, Dict[str, Optional[Tensor]]]]
+    ):
+        encoder_out: Optional[Dict[str, List[Tensor]]] = None
+        for i, model in enumerate(self.models):
+            if self.has_encoder():
+                encoder_out = encoder_outs[i]
+            # decode each model
+            if self.has_incremental_states():
+                decoder_out = model.decoder.forward(
+                    tokens,
+                    encoder_out=encoder_out,
+                    incremental_state=incremental_states[i],
+                    features_only=True
+                )
+            else:
+                decoder_out = model.decoder.forward(tokens, encoder_out=encoder_out, features_only=True)
+
+        return decoder_out[0]
 
     @torch.jit.export
     def reorder_encoder_out(self, encoder_outs: Optional[List[Dict[str, List[Tensor]]]], new_order):

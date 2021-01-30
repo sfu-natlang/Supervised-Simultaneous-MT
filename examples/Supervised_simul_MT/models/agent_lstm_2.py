@@ -23,8 +23,8 @@ from torch import Tensor
 DEFAULT_MAX_TARGET_POSITIONS = 1e5
 
 
-@register_model("agent_lstm")
-class AgentLSTMModel(FairseqLanguageModel):
+@register_model("agent_lstm_2")
+class AgentLSTMModel2(FairseqLanguageModel):
     def __init__(self, decoder):
         super().__init__(decoder)
 
@@ -185,16 +185,9 @@ class LSTMDecoder(FairseqIncrementalDecoder):
         self.num_layers = num_layers
 
         self.adaptive_softmax = None
-        src_num_embeddings = len(src_dictionary)
-        trg_num_embeddings = len(trg_dictionary)
+
         agt_num_embeddings = len(agt_dictionary)
-
-        src_padding_idx = src_dictionary.pad()
-        trg_padding_idx = trg_dictionary.pad()
         agt_padding_idx = agt_dictionary.pad()
-
-        self.src_embed_tokens = Embedding(src_num_embeddings, embed_dim, src_padding_idx)
-        self.trg_embed_tokens = Embedding(trg_num_embeddings, embed_dim, trg_padding_idx)
         self.agt_embed_tokens = Embedding(agt_num_embeddings, embed_dim, agt_padding_idx)
 
         self.encoder_output_units = encoder_output_units
@@ -204,12 +197,12 @@ class LSTMDecoder(FairseqIncrementalDecoder):
         else:
             self.encoder_hidden_proj = self.encoder_cell_proj = None
 
-        self.additional_embedding = Linear(3*embed_dim, embed_dim)
+        #self.additional_embedding = Linear(1025+embed_dim, embed_dim)
 
         self.layers = nn.ModuleList(
             [
                 LSTMCell(
-                    input_size= embed_dim
+                    input_size=1025+embed_dim
                     if layer == 0
                     else hidden_size,
                     hidden_size=hidden_size,
@@ -257,8 +250,6 @@ class LSTMDecoder(FairseqIncrementalDecoder):
         """
 
         encoder_outs = torch.empty(0)
-        encoder_hiddens = torch.empty(0)
-        encoder_cells = torch.empty(0)
         encoder_padding_mask = torch.empty(0)
         srclen = encoder_outs.size(0)
 
@@ -268,19 +259,12 @@ class LSTMDecoder(FairseqIncrementalDecoder):
         _, _, featlen = tokens.size()
         bsz, seqlen = prev_output_tokens.size()
 
-        src_tokens = tokens[:, :, 0]
-        trg_tokens = tokens[:, :, 1]
+        x = self.agt_embed_tokens(prev_output_tokens)
 
-        # embed tokens
-        x1 = self.src_embed_tokens(src_tokens)
-        x2 = self.trg_embed_tokens(trg_tokens)
-        x3 = self.agt_embed_tokens(prev_output_tokens)
-
-        x = torch.cat((x1, x2, x3), dim=2)
+        x = torch.cat((x, tokens), dim=2)
 
         x = self.dropout_in_module(x)
-
-        x = self.additional_embedding(x)
+        #x = self.additional_embedding(x)
 
         # B x T x C -> T x B x C
         x = x.transpose(0, 1)
@@ -445,16 +429,16 @@ def Linear(in_features, out_features, bias=True, dropout=0.0):
     return m
 
 
-@register_model_architecture("agent_lstm", "agent_lstm")
+@register_model_architecture("agent_lstm_2", "agent_lstm_2")
 def base_architecture(args):
     args.dropout = getattr(args, "dropout", 0.1)
-    args.decoder_embed_dim = getattr(args, "decoder_embed_dim", 1024)
+    args.decoder_embed_dim = getattr(args, "decoder_embed_dim", 128)
     args.decoder_embed_path = getattr(args, "decoder_embed_path", None)
     args.decoder_hidden_size = getattr(
         args, "decoder_hidden_size", args.decoder_embed_dim
     )
     args.decoder_layers = getattr(args, "decoder_layers", 4)
-    args.decoder_out_embed_dim = getattr(args, "decoder_out_embed_dim", 512)
+    args.decoder_out_embed_dim = getattr(args, "decoder_out_embed_dim", 128)
     args.decoder_attention = getattr(args, "decoder_attention", "0")
     args.decoder_dropout_in = getattr(args, "decoder_dropout_in", args.dropout)
     args.decoder_dropout_out = getattr(args, "decoder_dropout_out", args.dropout)

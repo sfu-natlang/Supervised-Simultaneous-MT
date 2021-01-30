@@ -516,7 +516,7 @@ class Trainer(object):
         self.task.begin_valid_epoch(epoch, self.get_model())
 
     def reset_dummy_batch(self, batch):
-        self._dummy_batch = batchs
+        self._dummy_batch = batch
 
     @metrics.aggregate("train")
     def train_step(self, samples, raise_oom=False):
@@ -561,10 +561,7 @@ class Trainer(object):
                             hypos = self.generator.generate(
                                 self.nmt_model, sample, prefix_tokens=prefix_tokens, constraints=constraints
                             )
-                        sample = agent_utils.prepare_simultaneous_input(hypos, sample,
-                                                                        self.task.source_dictionary,
-                                                                        self.task.target_dictionary,
-                                                                        self.task.agent_dictionary)
+                        sample = agent_utils.prepare_simultaneous_input(hypos, sample, self.task)
 
                     loss, sample_size_i, logging_output = self.task.train_step(
                         sample=sample,
@@ -812,6 +809,17 @@ class Trainer(object):
             sample, is_dummy_batch = self._prepare_sample(sample)
 
             try:
+                if self.task.args._name == 'Supervised_simultaneous_translation':
+                    prefix_tokens = None
+                    constraints = None
+                    if "constraints" in sample:
+                        constraints = sample["constraints"]
+                    with torch.no_grad():
+                        hypos = self.generator.generate(
+                            self.nmt_model, sample, prefix_tokens=prefix_tokens, constraints=constraints
+                        )
+                    sample = agent_utils.prepare_simultaneous_input(hypos, sample, self.task)
+
                 _loss, sample_size, logging_output = self.task.valid_step(
                     sample, self.model, self.criterion
                 )
