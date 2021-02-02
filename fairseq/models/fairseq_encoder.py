@@ -57,7 +57,7 @@ class FairseqEncoder(nn.Module):
     @torch.jit.unused
     def forward_non_torchscript(self, net_input: Dict[str, Tensor]):
         encoder_input = {
-            k: v for k, v in net_input.items() if k != "prev_output_tokens"
+            k: v for k, v in net_input.items() if (k != "prev_output_tokens" and k != 'full_src_lengths')
         }
         return self.forward(**encoder_input)
 

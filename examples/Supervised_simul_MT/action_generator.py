@@ -91,6 +91,8 @@ class ActionGenerator(nn.Module):
         # If True then _generate() returns Encoder and Decoder outputs as well.
         self.all_features = False
 
+        self.has_target = False
+
         assert temperature > 0, "--temperature must be greater than 0"
 
         self.search = (
@@ -174,7 +176,7 @@ class ActionGenerator(nn.Module):
 
         # If the first element of a sample is pad, replace it with unk. (We'll get errors when generating translations)
         first = sample_net_input['src_tokens'][:, 0]
-        if self.pad in sample_net_input['src_tokens'][:, 0]:
+        if self.pad in first:
             for batch_index in range(sample_net_input['src_tokens'].shape[0]):
                 if sample_net_input['src_tokens'][batch_index, 0] == self.pad:
                     sample_net_input['src_tokens'][batch_index, 0] = self.unk
@@ -191,7 +193,9 @@ class ActionGenerator(nn.Module):
             new_net_input.append(
                 {'src_tokens': source_tokens,
                  'src_lengths': torch.min(sample_net_input['src_lengths'][:num_undone],
-                                          torch.tensor([i + 2] * num_undone, device=source_tokens.device))}
+                                          torch.tensor([i + 2] * num_undone, device=source_tokens.device)),
+                 'full_src_lengths': sample_net_input['src_lengths'][:num_undone]
+                 } # full_src_lengths will be used in _generate_train() to determine the length of target sentences.
             )
         incremental_sample['net_input'] = new_net_input
         return incremental_sample
@@ -276,17 +280,19 @@ class ActionGenerator(nn.Module):
             bos_token (int, optional): beginning of sentence token
                 (default: self.eos)
         """
+        self.all_features = True
+        self.has_target = True
         incremental_samples = self.extract_incremental_samples(sample)
-        # translations = torch.zeros(sample['net_input']['src_tokens'].shape[1])
         for i in range(sample['net_input']['src_tokens'].shape[1] - 1):
-            # if i < 2:
             subsample = {
                 k: v for k, v in sample.items() if k != "net_input"
             }
             subsample['net_input'] = incremental_samples['net_input'][i]
             print(len(subsample['net_input']['src_lengths']))
-            self.all_features = True
-            partial_translation = self._generate(subsample, **kwargs)
+            if self.has_target:
+                partial_translation = self._generate_train(subsample, **kwargs)
+            else:
+                partial_translation = self._generate(subsample, **kwargs)
             if i == 0:
                 translations = [[partial] for partial in partial_translation]
             else:
@@ -299,6 +305,66 @@ class ActionGenerator(nn.Module):
             translations = [[partial] for partial in partial_translation]
 
         return self.generate_action_sequence(translations, sample['net_input'])
+
+    def _generate_train(
+            self,
+            sample: Dict[str, Dict[str, Tensor]],
+            prefix_tokens: Optional[Tensor] = None,
+            constraints: Optional[Tensor] = None,
+            bos_token: Optional[int] = None,
+    ):
+        net_input = sample["net_input"]
+        target = sample["target"]
+
+        # bsz: total number of sentences in beam
+        # Note that src_tokens may have more than 2 dimensions (i.e. audio features)
+        bsz, src_len = net_input["src_tokens"].size()[:2]
+
+        # compute the encoder output for each beam
+        encoder_outs = self.model.forward_encoder(net_input)
+        decoder_out = []
+
+        # ensure encoder_outs is a List.
+        assert encoder_outs is not None
+
+        previous_tokens = (
+            torch.zeros(bsz, target.size(1)).to(net_input["src_tokens"]).long().fill_(self.pad)
+        )  # +2 for eos and pad
+        previous_tokens[:, 0] = self.eos if bos_token is None else bos_token
+        previous_tokens[:, 1:] = target[:bsz, :-1]
+
+        lprobs, avg_attn_scores = self.model.forward_decoder(
+            previous_tokens,
+            encoder_outs,
+            self.temperature,
+            has_incremental=False
+        )
+        # bsz x tgt_len x src_len --> bsz x src_len x tgt_len
+        avg_attn_scores = avg_attn_scores.permute(0, 2, 1)
+
+        if self.all_features:
+            decoder_out = self.model.forward_decoder_features_only(
+                previous_tokens,
+                encoder_outs,
+                has_incremental=False
+            )
+
+        # Take care of NaNs
+        lprobs[lprobs != lprobs] = torch.tensor(-math.inf).to(lprobs)
+
+        lprobs[:, :, self.pad] = -math.inf  # never select pad
+        lprobs[:, :, self.unk] -= self.unk_penalty  # apply unk penalty
+
+        top_predictions = torch.topk(lprobs, k=1)
+        indices = torch.squeeze(top_predictions[1])
+
+        finalized_sents = self.refine_hypos(
+            indices,
+            avg_attn_scores,
+            encoder_outs,
+            decoder_out,
+        )
+        return finalized_sents
 
     def _generate(
             self,
@@ -731,6 +797,58 @@ class ActionGenerator(nn.Module):
         tensor[mask] = tensor[mask][:, :1, :]
         return tensor.view(-1, tensor.size(-1))
 
+    def refine_hypos(
+            self,
+            tokens,
+            attn: Optional[Tensor],
+            encoder_out: Optional[List],
+            decoder_out: Optional[List],
+    ):
+        """
+        Same as finalize_hypos() but will be used during training of Agent
+        """
+
+        # list of completed sentences
+        finalized = torch.jit.annotate(
+            List[List[Dict[str, Tensor]]],
+            [torch.jit.annotate(List[Dict[str, Tensor]], []) for i in range(len(tokens))],
+        )  # contains lists of dictionaries of infomation about the hypothesis being finalized at each step
+
+        # For every finished beam item
+        for i in range(len(tokens)):
+            eos_idx = torch.nonzero(tokens[i]==self.eos)
+            if len(eos_idx) > 0:
+                final_tokens = tokens[i, :int(eos_idx[0])+1]
+            else:
+                final_tokens = torch.cat((tokens[i], torch.tensor([self.eos]).to(tokens) )).to(tokens)
+
+            if attn is not None:
+                # remove padding tokens from attn scores
+                hypo_attn = attn[i]
+            else:
+                hypo_attn = torch.empty(0)
+
+            if self.all_features:
+                hypo_encoder_out = encoder_out[0]['encoder_out'][0][:, i, :]
+                hypo_decoder_out = decoder_out[i]
+            else:
+                hypo_encoder_out = torch.empty(0)
+                hypo_decoder_out = torch.empty(0)
+
+            finalized[i].append(
+                {
+                    "tokens": final_tokens,
+                    "score": torch.tensor(0.0).type(torch.float),
+                    "attention": hypo_attn, # src_len x tgt_len
+                    "encoder_out": hypo_encoder_out,
+                    "decoder_out": hypo_decoder_out,
+                    "alignment": torch.empty(0),
+                    "positional_scores": torch.tensor(0.0).type(torch.float),
+                }
+            # score, alignment, positional_scores are there to keep output format
+            )
+        return finalized
+
     def finalize_hypos(
             self,
             step: int,
@@ -983,8 +1101,10 @@ class EnsembleModel(nn.Module):
             encoder_outs: List[Dict[str, List[Tensor]]],
             incremental_states: List[Dict[str, Dict[str, Optional[Tensor]]]],
             temperature: float = 1.0,
+            has_incremental=True,
     ):
         log_probs = []
+        self.has_incremental = has_incremental
         avg_attn: Optional[Tensor] = None
         encoder_out: Optional[Dict[str, List[Tensor]]] = None
         for i, model in enumerate(self.models):
@@ -997,8 +1117,16 @@ class EnsembleModel(nn.Module):
                     encoder_out=encoder_out,
                     incremental_state=incremental_states[i],
                 )
+                decoder_out_tuple = (
+                    decoder_out[0][:, -1:, :].div_(temperature),
+                    None if len(decoder_out) <= 1 else decoder_out[1],
+                )
             else:
                 decoder_out = model.decoder.forward(tokens, encoder_out=encoder_out)
+                decoder_out_tuple = (
+                    decoder_out[0][:, :, :].div_(temperature),
+                    None if len(decoder_out) <= 1 else decoder_out[1],
+                )
 
             attn: Optional[Tensor] = None
             decoder_len = len(decoder_out)
@@ -1011,18 +1139,17 @@ class EnsembleModel(nn.Module):
                         attn = attn_holder
                     elif attn_holder is not None:
                         attn = attn_holder[0]
-                if attn is not None:
+                if attn is not None and self.has_incremental_states():
                     attn = attn[:, -1, :]
 
-            decoder_out_tuple = (
-                decoder_out[0][:, -1:, :].div_(temperature),
-                None if decoder_len <= 1 else decoder_out[1],
-            )
 
             probs = model.get_normalized_probs(
                 decoder_out_tuple, log_probs=True, sample=None
             )
-            probs = probs[:, -1, :]
+
+            if self.has_incremental_states():
+                probs = probs[:, -1, :]
+
             if self.models_size == 1:
                 return probs, attn
 
@@ -1046,8 +1173,10 @@ class EnsembleModel(nn.Module):
             self,
             tokens,
             encoder_outs: List[Dict[str, List[Tensor]]],
-            incremental_states: List[Dict[str, Dict[str, Optional[Tensor]]]]
+            incremental_states: List[Dict[str, Dict[str, Optional[Tensor]]]] = None,
+            has_incremental=True,
     ):
+        self.has_incremental = has_incremental
         encoder_out: Optional[Dict[str, List[Tensor]]] = None
         for i, model in enumerate(self.models):
             if self.has_encoder():

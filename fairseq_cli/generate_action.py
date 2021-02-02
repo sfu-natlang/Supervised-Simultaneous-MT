@@ -274,6 +274,11 @@ def _main(cfg: DictConfig, output_file):
             action_str = " ".join([str(act) for act in hypo['action_seq']])
             if not cfg.common_eval.quiet:
                 score = hypo["score"] / math.log(2)  # convert to base 2
+                # Generated action sequence
+                print(
+                    "A-{}\t{}\t{}".format(sample_id, score, action_str),
+                    file=output_file,
+                )
                 # original hypothesis (after tokenization and BPE)
                 print(
                     "H-{}\t{}\t{}".format(sample_id, score, hypo_str),
@@ -282,21 +287,6 @@ def _main(cfg: DictConfig, output_file):
                 # detokenized hypothesis
                 print(
                     "D-{}\t{}\t{}".format(sample_id, score, detok_hypo_str),
-                    file=output_file,
-                )
-                print(
-                    "P-{}\t{}".format(
-                        sample_id,
-                        " ".join(
-                            map(
-                                lambda x: "{:.4f}".format(x),
-                                # convert from base e to base 2
-                                hypo["positional_scores"]
-                                    .div_(math.log(2))
-                                    .tolist(),
-                                    )
-                        ),
-                    ),
                     file=output_file,
                 )
 
