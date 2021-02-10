@@ -255,6 +255,7 @@ class LSTMDecoder(FairseqIncrementalDecoder):
 
         if incremental_state is not None and len(incremental_state) > 0:
             prev_output_tokens = prev_output_tokens[:, -1:]
+            tokens = tokens[:, -1:, :]
 
         _, _, featlen = tokens.size()
         bsz, seqlen = prev_output_tokens.size()

@@ -149,3 +149,28 @@ def prepare_simultaneous_input(hypos, sample, task):
         return prepare_input_type1(hypos, sample, src_pad, trg_pad, agt_dict)
     else:
         return prepare_input_type2(hypos, sample, agt_dict)
+
+def infer_input_features(hypos, previous_actions):
+    bsz = len(hypos)
+    encoder_embed_dim = hypos[0][0]['encoder_out'].shape[1]
+    decoder_embed_dim = hypos[0][0]['decoder_out'].shape[1]
+    feat_len = 1 + encoder_embed_dim + decoder_embed_dim
+    num_writes = torch.sum(torch.eq(previous_actions, 5), dim=1)
+    num_reads = torch.sum(torch.eq(previous_actions, 4), dim=1)
+
+    final_input = torch.zeros(
+        bsz, feat_len,
+        dtype=torch.float,
+        device=hypos[0][0]['encoder_out'].device
+    )
+    for i, hypo in enumerate(hypos):
+        num_read = num_reads[i]
+        num_write = num_writes[i]
+        src_embedding = hypo[num_read-1]['encoder_out'][num_read-1]
+        trg_embedding = hypo[num_read-1]['decoder_out'][num_write]
+        attention = torch.mean(hypo[num_read-1]['attention'][:, num_write])
+
+        final_input[i][:encoder_embed_dim] = src_embedding
+        final_input[i][encoder_embed_dim:feat_len-1] = trg_embedding
+        final_input[i][-1] = attention
+    return final_input

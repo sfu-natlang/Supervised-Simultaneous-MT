@@ -488,7 +488,7 @@ class Trainer(object):
             data_buffer_size=self.cfg.dataset.data_buffer_size,
             disable_iterator_cache=disable_iterator_cache,
         )
-        self.reset_dummy_batch(batch_iterator.first_batch)
+        #self.reset_dummy_batch(batch_iterator.first_batch)
         return batch_iterator
 
     def begin_epoch(self, epoch):
@@ -531,6 +531,8 @@ class Trainer(object):
         # forward and backward pass
         logging_outputs, sample_size, ooms = [], 0, 0
         for i, sample in enumerate(samples):
+            if sample is None or len(sample) == 0:
+                continue
             sample, is_dummy_batch = self._prepare_sample(sample)
 
             def maybe_no_sync():
@@ -683,6 +685,8 @@ class Trainer(object):
             self.zero_grad()
             with NanDetector(self.get_model()):
                 for _, sample in enumerate(samples):
+                    if sample is None or len(sample) == 0:
+                        continue
                     sample, _ = self._prepare_sample(sample)
                     self.task.train_step(
                         sample,
@@ -805,6 +809,9 @@ class Trainer(object):
         with torch.no_grad():
             self.model.eval()
             self.criterion.eval()
+
+            if sample is None or len(sample) == 0:
+                return None
 
             sample, is_dummy_batch = self._prepare_sample(sample)
 
