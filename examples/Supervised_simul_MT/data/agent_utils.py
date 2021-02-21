@@ -150,27 +150,54 @@ def prepare_simultaneous_input(hypos, sample, task):
     else:
         return prepare_input_type2(hypos, sample, agt_dict)
 
+
 def infer_input_features(hypos, previous_actions):
     bsz = len(hypos)
+    eos = 2
     encoder_embed_dim = hypos[0][0]['encoder_out'].shape[1]
     decoder_embed_dim = hypos[0][0]['decoder_out'].shape[1]
     feat_len = 1 + encoder_embed_dim + decoder_embed_dim
     num_writes = torch.sum(torch.eq(previous_actions, 5), dim=1)
     num_reads = torch.sum(torch.eq(previous_actions, 4), dim=1)
 
-    final_input = torch.zeros(
+    final_features = torch.zeros(
         bsz, feat_len,
         dtype=torch.float,
         device=hypos[0][0]['encoder_out'].device
     )
+    src_tokens = torch.zeros(
+        bsz,
+        dtype=torch.int,
+        device=hypos[0][0]['encoder_out'].device
+    )
+    trg_tokens = torch.zeros(
+        bsz,
+        dtype=torch.int,
+        device=hypos[0][0]['encoder_out'].device
+    )
     for i, hypo in enumerate(hypos):
-        num_read = num_reads[i]
-        num_write = num_writes[i]
+        num_read = int(num_reads[i])
+        num_write = int(num_writes[i])
+
+        # The last write is EOS. We just need to continue to read more source words.
+        if num_write > 1 and num_write >= len(hypo[num_read-1]['tokens']):
+            num_write = len(hypo[num_read-1]['tokens'])-1
+
         src_embedding = hypo[num_read-1]['encoder_out'][num_read-1]
         trg_embedding = hypo[num_read-1]['decoder_out'][num_write]
+
+        # We will use src and trg tokens for checking stopping criteria in the Agent.
+        src_tokens[i] = hypo[-1]['src_tokens'][num_read-1]
+        trg_tokens[i] = hypo[num_read-1]['tokens'][num_write]
+
         attention = torch.mean(hypo[num_read-1]['attention'][:, num_write])
 
-        final_input[i][:encoder_embed_dim] = src_embedding
-        final_input[i][encoder_embed_dim:feat_len-1] = trg_embedding
-        final_input[i][-1] = attention
-    return final_input
+        final_features[i][:encoder_embed_dim] = src_embedding
+        final_features[i][encoder_embed_dim:feat_len-1] = trg_embedding
+        final_features[i][-1] = attention
+    final_dict = {
+        'src_tokens': src_tokens,
+        'trg_tokens': trg_tokens,
+        'input_features': final_features
+    }
+    return final_dict

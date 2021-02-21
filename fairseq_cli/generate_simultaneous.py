@@ -143,6 +143,10 @@ def _main(cfg: DictConfig, output_file):
             model.cuda()
         model.prepare_for_inference_(cfg)
 
+    for model in agent_models:
+        if use_cuda and not cfg.distributed_training.pipeline_model_parallel:
+            model.cuda()
+
     # Load alignment dictionary for unknown word replacement
     # (None if no unknown word replacement, empty if no path to align dictionary)
     align_dict = utils.load_align_dict(cfg.generation.replace_unk)
@@ -217,6 +221,7 @@ def _main(cfg: DictConfig, output_file):
             prefix_tokens=prefix_tokens,
             constraints=constraints,
         )
+        hypos = [h[0] for h in hypos]
         num_generated_tokens = sum(len(h['tokens']) for h in hypos)
         gen_timer.stop(num_generated_tokens)
 
@@ -282,7 +287,7 @@ def _main(cfg: DictConfig, output_file):
                 extra_symbols_to_ignore=get_symbols_to_strip_from_output(generator),
             )
             detok_hypo_str = decode_fn(hypo_str)
-            action_str = " ".join([str(act) for act in hypo['action_seq']])
+            action_str = " ".join([str(int(act)) for act in hypo['actions']])
             if not cfg.common_eval.quiet:
                 score = hypo["score"] / math.log(2)  # convert to base 2
                 # Generated action sequence
