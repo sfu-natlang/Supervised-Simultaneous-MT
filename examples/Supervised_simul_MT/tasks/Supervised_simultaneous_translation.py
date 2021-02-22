@@ -212,9 +212,14 @@ class SupervisedSimulTranslationTask(TranslationTask):
                             help='if >0, then bucket source and target lengths into N '
                                  'buckets and pad accordingly; this is useful on TPUs '
                                  'to minimize the number of compilations')
+
         parser.add_argument('--has-target', default='True', type=str, metavar='BOOL',
                             help='if True uses target words in order to generate'
                                  'NMT translation. Set it to False for inference')
+        parser.add_argument('--agent-path', metavar="AGTPATH", default=None,
+                            help='Path to the fully trained agent model')
+        parser.add_argument('--nmt-path', metavar="NMTPATH", default=None,
+                            help='Path to the fully trained NMT model')
 
         # options for reporting BLEU during validation
         parser.add_argument('--eval-bleu', action='store_true',
@@ -241,6 +246,10 @@ class SupervisedSimulTranslationTask(TranslationTask):
         super().__init__(args, src_dict, tgt_dict)
         self.agent_dictionary = None
         self.has_target = getattr(args, "has_target", True)
+        self.has_target = False if self.has_target == 'False' else True
+        self.agent_path = getattr(args, "agent_path", None)
+        self.nmt_path = getattr(args, "nmt_path", None)
+
 
     @classmethod
     def setup_task(cls, args, **kwargs):

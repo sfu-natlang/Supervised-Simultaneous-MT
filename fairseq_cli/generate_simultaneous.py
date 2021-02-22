@@ -66,7 +66,6 @@ def _main(cfg: DictConfig, output_file):
     )
     logger = logging.getLogger("fairseq_cli.generate")
 
-    agent_path = "/Users/alinejad/Desktop/SFU/Research/Speech-to-text-transation/Supervised-fairseq/agent2_trans_multi30k_deen/checkpoint_best.pt"
     utils.import_user_module(cfg.common)
 
     if cfg.dataset.max_tokens is None and cfg.dataset.batch_size is None:
@@ -104,7 +103,7 @@ def _main(cfg: DictConfig, output_file):
     )
 
     agent_models, agent_saved_cfg = checkpoint_utils.load_model_ensemble(
-        utils.split_paths(agent_path),
+        utils.split_paths(task.agent_path),
         arg_overrides=overrides,
         task=task,
         suffix=cfg.checkpoint.checkpoint_suffix,

@@ -380,25 +380,14 @@ def convert_namespace_to_omegaconf(args: Namespace) -> DictConfig:
     config_path = os.path.join("..", "config")
 
     GlobalHydra.instance().clear()
-
-    if getattr(args, "task", None) == 'Supervised_simultaneous_translation':
-        with initialize(config_path=config_path):
-            try:
-                composed_cfg = compose("simultaneous_config", overrides=overrides, strict=False)
-            except:
-                logger.error("Error when composing. Overrides: " + str(overrides))
-                raise
-            for k in deletes:
-                composed_cfg[k] = None
-    else:
-        with initialize(config_path=config_path):
-            try:
-                composed_cfg = compose("config", overrides=overrides, strict=False)
-            except:
-                logger.error("Error when composing. Overrides: " + str(overrides))
-                raise
-            for k in deletes:
-                composed_cfg[k] = None
+    with initialize(config_path=config_path):
+        try:
+            composed_cfg = compose("config", overrides=overrides, strict=False)
+        except:
+            logger.error("Error when composing. Overrides: " + str(overrides))
+            raise
+        for k in deletes:
+            composed_cfg[k] = None
 
     cfg = OmegaConf.create(
         OmegaConf.to_container(composed_cfg, resolve=True, enum_to_str=True)

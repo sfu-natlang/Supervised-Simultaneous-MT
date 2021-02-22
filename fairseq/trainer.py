@@ -131,11 +131,10 @@ class Trainer(object):
         self._cumulative_training_time = None
 
         if self.task.args._name == 'Supervised_simultaneous_translation':
-            nmt_task = tasks.setup_task(cfg.nmt_task)
             self.nmt_model, _args = checkpoint_utils.load_model_ensemble(
-                utils.split_paths(cfg.nmt_task.path),
+                utils.split_paths(task.nmt_path),
                 arg_overrides={},
-                task=nmt_task,
+                task=self.task,
                 suffix='',
                 strict=True,
                 num_shards=1,
@@ -148,9 +147,9 @@ class Trainer(object):
                 if self.cuda and not cfg.distributed_training.pipeline_model_parallel:
                     model.cuda()
                 model.prepare_for_inference_(cfg)
-                cfg.nmt_task.constraints = False
-            self.generator = nmt_task.build_action_generator(
-                self.nmt_model, cfg.nmt_task, extra_gen_cls_kwargs=None
+                cfg.task.constraints = False
+            self.generator = self.task.build_action_generator(
+                self.nmt_model, cfg.task, extra_gen_cls_kwargs=None
             )
 
     def reinitialize(self):

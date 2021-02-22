@@ -296,11 +296,10 @@ class ActionGenerator(nn.Module):
                 k: v for k, v in sample.items() if k != "net_input"
             }
             subsample['net_input'] = incremental_samples['net_input'][i]
-            # print(len(subsample['net_input']['src_lengths']))
-            if self.has_target == 'True' or self.has_target == True:
-                partial_translation = self._generate_train(subsample)
-            else:
-                partial_translation = self._generate(subsample, **kwargs)
+
+            partial_translation = self._generate_train(subsample) if self.has_target \
+                else self._generate(subsample, **kwargs)
+
             if i == 0:
                 translations = [[partial] for partial in partial_translation]
             else:
