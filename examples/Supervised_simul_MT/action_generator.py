@@ -306,12 +306,7 @@ class ActionGenerator(nn.Module):
                 for index, trans in enumerate(partial_translation):
                     translations[index].append(trans)
 
-        # If all sents in sample contains only EOS token it does not go through the above loop
-        # if sample['net_input']['src_tokens'].shape[1] == 1:
-        #     partial_translation = self._generate(sample, **kwargs)
-        #     translations = [[partial] for partial in partial_translation]
-
-        return self.generate_action_sequence(translations, sample['net_input'])
+        return self.generate_action_sequence(translations, sample['net_input'], post_process=False)
 
     def _generate_train(
             self,
@@ -343,8 +338,9 @@ class ActionGenerator(nn.Module):
             self.temperature,
             has_incremental=False
         )
-        # bsz x tgt_len x src_len --> bsz x src_len x tgt_len
-        avg_attn_scores = avg_attn_scores.permute(0, 2, 1)
+        if avg_attn_scores is not None:
+            # bsz x tgt_len x src_len --> bsz x src_len x tgt_len
+            avg_attn_scores = avg_attn_scores.permute(0, 2, 1)
 
         if self.all_features:
             decoder_out = self.model.forward_decoder_features_only(
@@ -824,11 +820,16 @@ class ActionGenerator(nn.Module):
         # For every finished beam item
         for i in range(len(tokens)):
             # Remove all tokens generated after the first EOS token.
-            eos_idx = torch.nonzero(tokens[i]==self.eos)
+            current_token = tokens[i]
+            if current_token.dim() == 0:
+                current_token = torch.unsqueeze(current_token, dim=0)
+            eos_idx = torch.nonzero(current_token==self.eos)
             if len(eos_idx) > 0:
-                final_tokens = tokens[i][:int(eos_idx[0])+1]
+                final_tokens = current_token[:int(eos_idx[0])+1]
             else:
-                final_tokens = torch.cat((tokens[i], torch.tensor([self.eos]).to(tokens))).to(tokens)
+                final_tokens = torch.cat(
+                    (current_token, torch.tensor([self.eos]).to(tokens))
+                ).to(tokens)
 
             if attn is not None:
                 # remove padding tokens from attn scores
@@ -837,7 +838,9 @@ class ActionGenerator(nn.Module):
                 hypo_attn = torch.empty(0)
 
             if self.all_features:
-                hypo_encoder_out = encoder_out[0]['encoder_out'][0][:, i, :]
+                hypo_encoder_out = encoder_out[0]['encoder_out'][:, i, :] \
+                    if torch.is_tensor(encoder_out[0]['encoder_out']) \
+                    else encoder_out[0]['encoder_out'][0][:, i, :]
                 hypo_decoder_out = decoder_out[i]
             else:
                 hypo_encoder_out = torch.empty(0)

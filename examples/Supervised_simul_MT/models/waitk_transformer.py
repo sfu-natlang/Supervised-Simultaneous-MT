@@ -21,7 +21,7 @@ from fairseq.models import (
     register_model_architecture,
 )
 
-from examples.waitk.modules import TransformerEncoderLayer, TransformerDecoderLayer
+from examples.Supervised_simul_MT.modules import TransformerEncoderLayer, TransformerDecoderLayer
 
 
 @register_model('waitk_transformer')
