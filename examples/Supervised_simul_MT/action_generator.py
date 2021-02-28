@@ -14,6 +14,7 @@ from torch import Tensor
 from examples.Supervised_simul_MT.data import agent_utils
 from examples.Supervised_simul_MT.models.agent_lstm_2 import AgentLSTMModel2
 from examples.Supervised_simul_MT.models.agent_lstm import AgentLSTMModel
+from examples.Supervised_simul_MT.models import waitk_transformer
 
 
 class ActionGenerator(nn.Module):
@@ -2241,7 +2242,9 @@ class EnsembleModel(nn.Module):
                     None if len(decoder_out) <= 1 else decoder_out[1],
                 )
             else:
-                decoder_out = model.decoder.forward(tokens, encoder_out=encoder_out)
+                decoder_out = model.decoder.forward_train(tokens, encoder_out=encoder_out) \
+                    if isinstance(model, waitk_transformer.WaitkTransformerModel) \
+                    else model.decoder.forward(tokens, encoder_out=encoder_out)
                 decoder_out_tuple = (
                     decoder_out[0][:, :, :].div_(temperature),
                     None if len(decoder_out) <= 1 else decoder_out[1],

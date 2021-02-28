@@ -450,3 +450,88 @@ def base_architecture(args):
         args, "adaptive_softmax_cutoff", "10000,50000,200000"
     )
     args.residuals = getattr(args, "residuals", False)
+
+@register_model_architecture("agent_lstm_2", "agent_lstm_2_med")
+def base_architecture(args):
+    args.dropout = getattr(args, "dropout", 0.1)
+    args.decoder_embed_dim = getattr(args, "decoder_embed_dim", 512)
+    args.decoder_embed_path = getattr(args, "decoder_embed_path", None)
+    args.decoder_hidden_size = getattr(
+        args, "decoder_hidden_size", args.decoder_embed_dim
+    )
+    args.decoder_layers = getattr(args, "decoder_layers", 2)
+    args.decoder_out_embed_dim = getattr(args, "decoder_out_embed_dim", 512)
+    args.decoder_attention = getattr(args, "decoder_attention", "0")
+    args.decoder_dropout_in = getattr(args, "decoder_dropout_in", args.dropout)
+    args.decoder_dropout_out = getattr(args, "decoder_dropout_out", args.dropout)
+    args.share_decoder_input_output_embed = getattr(
+        args, "share_decoder_input_output_embed", False
+    )
+    args.adaptive_softmax_cutoff = getattr(
+        args, "adaptive_softmax_cutoff", "10000,50000,200000"
+    )
+    args.residuals = getattr(args, "residuals", True)
+
+@register_model_architecture("agent_lstm_2", "agent_lstm_2_big")
+def base_architecture(args):
+    args.dropout = getattr(args, "dropout", 0.1)
+    args.decoder_embed_dim = getattr(args, "decoder_embed_dim", 512)
+    args.decoder_embed_path = getattr(args, "decoder_embed_path", None)
+    args.decoder_hidden_size = getattr(
+        args, "decoder_hidden_size", args.decoder_embed_dim
+    )
+    args.decoder_layers = getattr(args, "decoder_layers", 4)
+    args.decoder_out_embed_dim = getattr(args, "decoder_out_embed_dim", 512)
+    args.decoder_attention = getattr(args, "decoder_attention", "0")
+    args.decoder_dropout_in = getattr(args, "decoder_dropout_in", args.dropout)
+    args.decoder_dropout_out = getattr(args, "decoder_dropout_out", args.dropout)
+    args.share_decoder_input_output_embed = getattr(
+        args, "share_decoder_input_output_embed", False
+    )
+    args.adaptive_softmax_cutoff = getattr(
+        args, "adaptive_softmax_cutoff", "10000,50000,200000"
+    )
+    args.residuals = getattr(args, "residuals", False)
+
+@register_model_architecture("agent_lstm_2", "agent_lstm_2_big2")
+def base_architecture(args):
+    args.dropout = getattr(args, "dropout", 0.1)
+    args.decoder_embed_dim = getattr(args, "decoder_embed_dim", 512)
+    args.decoder_embed_path = getattr(args, "decoder_embed_path", None)
+    args.decoder_hidden_size = getattr(
+        args, "decoder_hidden_size", 1024
+    )
+    args.decoder_layers = getattr(args, "decoder_layers", 2)
+    args.decoder_out_embed_dim = getattr(args, "decoder_out_embed_dim", 512)
+    args.decoder_attention = getattr(args, "decoder_attention", "0")
+    args.decoder_dropout_in = getattr(args, "decoder_dropout_in", args.dropout)
+    args.decoder_dropout_out = getattr(args, "decoder_dropout_out", args.dropout)
+    args.share_decoder_input_output_embed = getattr(
+        args, "share_decoder_input_output_embed", False
+    )
+    args.adaptive_softmax_cutoff = getattr(
+        args, "adaptive_softmax_cutoff", "10000,50000,200000"
+    )
+    args.residuals = getattr(args, "residuals", False)
+
+@register_model_architecture("agent_lstm_2", "agent_lstm_2_big3")
+def base_architecture(args):
+    args.dropout = getattr(args, "dropout", 0.1)
+    args.decoder_embed_dim = getattr(args, "decoder_embed_dim", 512)
+    args.decoder_embed_path = getattr(args, "decoder_embed_path", None)
+    args.decoder_hidden_size = getattr(
+        args, "decoder_hidden_size", 1024
+    )
+    args.decoder_layers = getattr(args, "decoder_layers", 4)
+    args.decoder_out_embed_dim = getattr(args, "decoder_out_embed_dim", 512)
+    args.decoder_attention = getattr(args, "decoder_attention", "0")
+    args.decoder_dropout_in = getattr(args, "decoder_dropout_in", args.dropout)
+    args.decoder_dropout_out = getattr(args, "decoder_dropout_out", args.dropout)
+    args.share_decoder_input_output_embed = getattr(
+        args, "share_decoder_input_output_embed", False
+    )
+    args.adaptive_softmax_cutoff = getattr(
+        args, "adaptive_softmax_cutoff", "10000,50000,200000"
+    )
+    args.residuals = getattr(args, "residuals", True)
+

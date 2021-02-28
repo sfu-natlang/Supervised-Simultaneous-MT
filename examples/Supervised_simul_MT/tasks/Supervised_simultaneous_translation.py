@@ -220,6 +220,8 @@ class SupervisedSimulTranslationTask(TranslationTask):
                             help='Path to the fully trained agent model')
         parser.add_argument('--nmt-path', metavar="NMTPATH", default=None,
                             help='Path to the fully trained NMT model')
+        parser.add_argument('--eval-waitk', metavar="waitk", default=7, type=int,
+                            help='Amount of k for evaluating waitk model')
 
         # options for reporting BLEU during validation
         parser.add_argument('--eval-bleu', action='store_true',
@@ -249,6 +251,7 @@ class SupervisedSimulTranslationTask(TranslationTask):
         self.has_target = False if self.has_target == 'False' else True
         self.agent_path = getattr(args, "agent_path", None)
         self.nmt_path = getattr(args, "nmt_path", None)
+        self.eval_waitk = getattr(args, "eval_waitk", 7)
 
 
     @classmethod
