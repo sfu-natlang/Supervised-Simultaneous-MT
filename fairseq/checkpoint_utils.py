@@ -312,6 +312,12 @@ def load_model_ensemble_and_task(
                 )
 
             if task is None:
+                # If the path to data file starts from a local directory we should change it to absolute path.
+                if cfg.task.data.startswith('.'):
+                    cfg.task.data = os.path.join(
+                        os.path.dirname(os.path.abspath(__file__)).rsplit('/', 1)[0],
+                        cfg.task.data.split('/', 1)[1]
+                    )
                 task = tasks.setup_task(cfg.task)
 
             # build model for ensemble

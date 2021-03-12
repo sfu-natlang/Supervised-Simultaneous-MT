@@ -111,7 +111,8 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
         return actions, target
 
     def compute_hamming_distance(self, actions, target):
-        return sum(xi != yi for xi, yi in zip(actions, target))
+        hamming = sum(xi != yi for xi, yi in zip(actions, target))
+        return hamming + abs(len(actions) - len(target))
 
     def compute_levenshtein(self, actions, target):
         """

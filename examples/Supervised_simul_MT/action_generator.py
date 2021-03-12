@@ -12,6 +12,7 @@ from fairseq import search, utils
 from fairseq.models import FairseqIncrementalDecoder
 from torch import Tensor
 from examples.Supervised_simul_MT.data import agent_utils
+from examples.Supervised_simul_MT.models.agent_lstm_3 import AgentLSTMModel3
 from examples.Supervised_simul_MT.models.agent_lstm_2 import AgentLSTMModel2
 from examples.Supervised_simul_MT.models.agent_lstm import AgentLSTMModel
 from examples.Supervised_simul_MT.models import waitk_transformer
@@ -38,7 +39,8 @@ class ActionGenerator(nn.Module):
             symbols_to_strip_from_output=None,
             lm_model=None,
             lm_weight=1.0,
-            has_target=True
+            has_target=True,
+            all_features = False
     ):
         """Generates translations of a given source sentence.
 
@@ -93,7 +95,7 @@ class ActionGenerator(nn.Module):
         self.no_repeat_ngram_size = no_repeat_ngram_size
 
         # If True then _generate() returns Encoder and Decoder outputs as well.
-        self.all_features = False
+        self.all_features = all_features
 
         self.has_target = has_target
 
@@ -199,7 +201,7 @@ class ActionGenerator(nn.Module):
                  'src_lengths': torch.min(sample_net_input['src_lengths'][:num_undone],
                                           torch.tensor([i + 2] * num_undone, device=source_tokens.device)),
                  'full_src_lengths': sample_net_input['src_lengths'][:num_undone]
-                 }  # full_src_lengths will be used in _generate_train() to determine the length of target sentences.
+                     }  # full_src_lengths will be used in _generate_train() to determine the length of target sentences.
             )
         incremental_sample['net_input'] = new_net_input
         return incremental_sample
@@ -220,7 +222,7 @@ class ActionGenerator(nn.Module):
         src_lengths = net_input['src_lengths']
         for index, translation in enumerate(translations):
             extended_translations.append(self._generate_action_sequence(translation, src_tokens[index],
-                                                                        src_lengths[index], post_process))
+                                                                            src_lengths[index], post_process))
         return extended_translations
 
     def _generate_action_sequence(self, sample, src_token, src_length, post_process):
@@ -268,6 +270,61 @@ class ActionGenerator(nn.Module):
             while j + 1 < src_length:
                 action_seq.append(0)
                 j = j + 1
+
+        assert (src_length + trg_length == len(action_seq)), [src_length, trg_length, len(action_seq)]
+        extended_sample = sample[-1][0]
+        extended_sample['src_tokens'] = src_token
+        extended_sample['action_seq'] = action_seq
+        extended_sample['subsets'] = subsets_generated
+        return extended_sample
+
+    def _generate_waitk_action_sequence(self, sample, src_token, src_length, post_process, k=5):
+        i, j = 0, 0
+        action_seq = [0]
+        trg_Gen = sample[-1][0]['tokens']
+
+        trg_length = len(trg_Gen)
+
+        # Generate action based on the first beam.
+        subsets_generated = [subset[0] for subset in sample]
+
+        if post_process:
+            src_str = self.prepare_post_process(src_token)
+            for index, sub_gen in enumerate(subsets_generated):
+                _, hypo_str, _ = utils.post_process_prediction(
+                    hypo_tokens=sub_gen["tokens"].int().cpu(),
+                    src_str=src_str,
+                    alignment=sub_gen["alignment"],
+                    align_dict=None,
+                    tgt_dict=self.tgt_dict,
+                    remove_bpe=None,
+                    extra_symbols_to_ignore=None,
+                )
+                hypo_str = hypo_str.strip().split(' ') + ['<EOS>']
+                subsets_generated[index]["hypo_str"] = hypo_str
+            trg_Gen = hypo_str
+            trg_length = len(trg_Gen)
+
+        while i < trg_length and j + 1 < src_length:
+            if j + 1 < k:  # +1 for the extra read added at the beginning.
+                action_seq.append(0)
+                j = j + 1
+            else:
+                action = 1 - action_seq[-1]  # Either 0 or 1
+                action_seq.append(action)
+                j = j + action
+                i = i + (1-action)
+
+        # Debug
+        if j + 1 < src_length:
+            # print("WARNING --> Some zeros added")
+            while j + 1 < src_length:
+                action_seq.append(0)
+                j = j + 1
+        if i < trg_length:
+            while i < trg_length:
+                action_seq.append(1)
+                i = i + 1
 
         assert (src_length + trg_length == len(action_seq)), [src_length, trg_length, len(action_seq)]
         extended_sample = sample[-1][0]
@@ -1128,7 +1185,9 @@ class SimultaneousGenerator(nn.Module):
             self.agent_models = EnsembleModel(agent_models)
 
         for model in self.agent_models.models:
-            if isinstance(model, AgentLSTMModel2):
+            if isinstance(model, AgentLSTMModel3):
+                self.task.args.arch = "agent_lstm_3"
+            elif isinstance(model, AgentLSTMModel2):
                 self.task.args.arch = "agent_lstm_2"
             elif isinstance(model, AgentLSTMModel):
                 self.task.args.arch = "agent_lstm"
@@ -1371,7 +1430,7 @@ class SimultaneousGenerator(nn.Module):
             lprobs[:, self.pad] = -math.inf  # never select pad
             lprobs[:, self.unk] = -math.inf  # never select unk
             lprobs[:, self.bos] = -math.inf  # never select bos
-            lprobs[:, self.eos] = -math.inf  # never select eos, except we say so
+            lprobs[:, self.eos] = -math.inf  # never select eos, except when we say so
 
             lprobs[:, self.read] = torch.where(
                 prior_src_tokens[:, step].eq(self.eos),
@@ -1513,6 +1572,28 @@ class SimultaneousGenerator(nn.Module):
                 List[Dict[str, Tensor]], finalized[sent]
             )
         return finalized
+
+    def _generate_simuleval(self, prior_input, prior_output, incremental_state):
+        if prior_input.dim() == 1:
+            prior_input = prior_input.unsqueeze(0).unsqueeze(0)
+        if prior_output.dim() == 1:
+            prior_output = prior_output.unsqueeze(0)
+        lprobs, avg_attn_scores = self.agent_models.forward_agent_decoder(
+            prior_input,
+            prior_output,
+            incremental_state,
+            self.temperature,
+        )
+        lprobs[lprobs != lprobs] = torch.tensor(-math.inf).to(lprobs)
+
+        lprobs[:, self.pad] = -math.inf  # never select pad
+        lprobs[:, self.unk] = -math.inf  # never select unk
+        lprobs[:, self.bos] = -math.inf  # never select bos
+        lprobs[:, self.eos] = -math.inf  # never select eos, except when we say so
+
+        top_predictions = torch.topk(lprobs, k=1)
+        index = torch.squeeze(top_predictions[1])
+        return index, incremental_state
 
     def _generate_beam(
             self,
