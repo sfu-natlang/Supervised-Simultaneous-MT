@@ -368,6 +368,7 @@ class SupervisedSimulTranslationTask(TranslationTask):
             no_repeat_ngram_size=getattr(args, "no_repeat_ngram_size", 0),
             search_strategy=search_strategy,
             has_target=self.has_target,
+            agent_arch=getattr(args, "arch", 'agent_lstm_3'),
             **extra_gen_cls_kwargs,
         )
 

@@ -560,7 +560,9 @@ class Trainer(object):
                             constraints = sample["constraints"]
                         with torch.no_grad():
                             hypos = self.generator.generate(
-                                self.nmt_model, sample, prefix_tokens=prefix_tokens, constraints=constraints
+                                self.nmt_model, sample,
+                                prefix_tokens=prefix_tokens,
+                                constraints=constraints
                             )
                         sample = agent_utils.prepare_simultaneous_input(hypos, sample, self.task)
 

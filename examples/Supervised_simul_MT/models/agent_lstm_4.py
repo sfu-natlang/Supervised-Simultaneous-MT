@@ -23,8 +23,8 @@ from torch import Tensor
 DEFAULT_MAX_TARGET_POSITIONS = 1e5
 
 
-@register_model("agent_lstm")
-class AgentLSTMModel(FairseqLanguageModel):
+@register_model("agent_lstm_4")
+class AgentLSTMModel4(FairseqLanguageModel):
     def __init__(self, decoder):
         super().__init__(decoder)
 
@@ -185,17 +185,14 @@ class LSTMDecoder(FairseqIncrementalDecoder):
         self.num_layers = num_layers
 
         self.adaptive_softmax = None
-        src_num_embeddings = len(src_dictionary)
-        trg_num_embeddings = len(trg_dictionary)
+
+        self.nmt_embed_dim = 512                          # Should be adaptive.
         agt_num_embeddings = len(agt_dictionary)
-
-        src_padding_idx = src_dictionary.pad()
-        trg_padding_idx = trg_dictionary.pad()
         agt_padding_idx = agt_dictionary.pad()
-
-        self.src_embed_tokens = Embedding(src_num_embeddings, embed_dim, src_padding_idx)
-        self.trg_embed_tokens = Embedding(trg_num_embeddings, embed_dim, trg_padding_idx)
         self.agt_embed_tokens = Embedding(agt_num_embeddings, embed_dim, agt_padding_idx)
+        self.enc_embed_tokens = Linear(self.nmt_embed_dim, 2*embed_dim)
+        self.dec_embed_tokens = Linear(self.nmt_embed_dim, 2*embed_dim)
+        self.tkn_embed_tokens = Linear(1+4*embed_dim, 3*embed_dim)
 
         self.encoder_output_units = encoder_output_units
         if encoder_output_units != hidden_size and encoder_output_units != 0:
@@ -204,12 +201,10 @@ class LSTMDecoder(FairseqIncrementalDecoder):
         else:
             self.encoder_hidden_proj = self.encoder_cell_proj = None
 
-        self.additional_embedding = Linear(3*embed_dim, embed_dim)
-
         self.layers = nn.ModuleList(
             [
                 LSTMCell(
-                    input_size= embed_dim
+                    input_size=4*embed_dim
                     if layer == 0
                     else hidden_size,
                     hidden_size=hidden_size,
@@ -257,30 +252,28 @@ class LSTMDecoder(FairseqIncrementalDecoder):
         """
 
         encoder_outs = torch.empty(0)
-        encoder_hiddens = torch.empty(0)
-        encoder_cells = torch.empty(0)
         encoder_padding_mask = torch.empty(0)
         srclen = encoder_outs.size(0)
 
         if incremental_state is not None and len(incremental_state) > 0:
             prev_output_tokens = prev_output_tokens[:, -1:]
+            tokens = tokens[:, -1:, :]
 
         _, _, featlen = tokens.size()
         bsz, seqlen = prev_output_tokens.size()
 
-        src_tokens = tokens[:, :, 0]
-        trg_tokens = tokens[:, :, 1]
+        assert len(tokens[0, 0]) == 2*self.nmt_embed_dim+1
 
-        # embed tokens
-        x1 = self.src_embed_tokens(src_tokens)
-        x2 = self.trg_embed_tokens(trg_tokens)
-        x3 = self.agt_embed_tokens(prev_output_tokens)
+        enc_embedded = self.enc_embed_tokens(tokens[:, :, :self.nmt_embed_dim])
+        dec_embedded = self.dec_embed_tokens(tokens[:, :, self.nmt_embed_dim:2*self.nmt_embed_dim])
 
-        x = torch.cat((x1, x2, x3), dim=2)
+        x = self.agt_embed_tokens(prev_output_tokens)
+        x_nmt = self.tkn_embed_tokens(torch.cat((enc_embedded, dec_embedded, tokens[:, :, -1:]), dim=2))
+
+        x = torch.cat((x, x_nmt), dim=2)
 
         x = self.dropout_in_module(x)
-
-        x = self.additional_embedding(x)
+        # x = self.additional_embedding(x)
 
         # B x T x C -> T x B x C
         x = x.transpose(0, 1)
@@ -445,15 +438,78 @@ def Linear(in_features, out_features, bias=True, dropout=0.0):
     return m
 
 
-@register_model_architecture("agent_lstm", "agent_lstm")
+@register_model_architecture("agent_lstm_4", "agent_lstm_4")
 def base_architecture(args):
     args.dropout = getattr(args, "dropout", 0.1)
-    args.decoder_embed_dim = getattr(args, "decoder_embed_dim", 1024)
+    args.decoder_embed_dim = getattr(args, "decoder_embed_dim", 128)
     args.decoder_embed_path = getattr(args, "decoder_embed_path", None)
     args.decoder_hidden_size = getattr(
         args, "decoder_hidden_size", args.decoder_embed_dim
     )
     args.decoder_layers = getattr(args, "decoder_layers", 4)
+    args.decoder_out_embed_dim = getattr(args, "decoder_out_embed_dim", 128)
+    args.decoder_attention = getattr(args, "decoder_attention", "0")
+    args.decoder_dropout_in = getattr(args, "decoder_dropout_in", args.dropout)
+    args.decoder_dropout_out = getattr(args, "decoder_dropout_out", args.dropout)
+    args.share_decoder_input_output_embed = getattr(
+        args, "share_decoder_input_output_embed", False
+    )
+    args.adaptive_softmax_cutoff = getattr(
+        args, "adaptive_softmax_cutoff", "10000,50000,200000"
+    )
+    args.residuals = getattr(args, "residuals", False)
+
+@register_model_architecture("agent_lstm_4", "agent_lstm_4_med")
+def base_architecture(args):
+    args.dropout = getattr(args, "dropout", 0.1)
+    args.decoder_embed_dim = getattr(args, "decoder_embed_dim", 128)
+    args.decoder_embed_path = getattr(args, "decoder_embed_path", None)
+    args.decoder_hidden_size = getattr(
+        args, "decoder_hidden_size", args.decoder_embed_dim
+    )
+    args.decoder_layers = getattr(args, "decoder_layers", 2)
+    args.decoder_out_embed_dim = getattr(args, "decoder_out_embed_dim", 128)
+    args.decoder_attention = getattr(args, "decoder_attention", "0")
+    args.decoder_dropout_in = getattr(args, "decoder_dropout_in", args.dropout)
+    args.decoder_dropout_out = getattr(args, "decoder_dropout_out", args.dropout)
+    args.share_decoder_input_output_embed = getattr(
+        args, "share_decoder_input_output_embed", False
+    )
+    args.adaptive_softmax_cutoff = getattr(
+        args, "adaptive_softmax_cutoff", "10000,50000,200000"
+    )
+    args.residuals = getattr(args, "residuals", True)
+
+@register_model_architecture("agent_lstm_4", "agent_lstm_4_big")
+def base_architecture(args):
+    args.dropout = getattr(args, "dropout", 0.1)
+    args.decoder_embed_dim = getattr(args, "decoder_embed_dim", 128)
+    args.decoder_embed_path = getattr(args, "decoder_embed_path", None)
+    args.decoder_hidden_size = getattr(
+        args, "decoder_hidden_size", 512
+    )
+    args.decoder_layers = getattr(args, "decoder_layers", 4)
+    args.decoder_out_embed_dim = getattr(args, "decoder_out_embed_dim", 128)
+    args.decoder_attention = getattr(args, "decoder_attention", "0")
+    args.decoder_dropout_in = getattr(args, "decoder_dropout_in", args.dropout)
+    args.decoder_dropout_out = getattr(args, "decoder_dropout_out", args.dropout)
+    args.share_decoder_input_output_embed = getattr(
+        args, "share_decoder_input_output_embed", False
+    )
+    args.adaptive_softmax_cutoff = getattr(
+        args, "adaptive_softmax_cutoff", "10000,50000,200000"
+    )
+    args.residuals = getattr(args, "residuals", False)
+
+@register_model_architecture("agent_lstm_4", "agent_lstm_4_big2")
+def base_architecture(args):
+    args.dropout = getattr(args, "dropout", 0.1)
+    args.decoder_embed_dim = getattr(args, "decoder_embed_dim", 512)
+    args.decoder_embed_path = getattr(args, "decoder_embed_path", None)
+    args.decoder_hidden_size = getattr(
+        args, "decoder_hidden_size", 1024
+    )
+    args.decoder_layers = getattr(args, "decoder_layers", 2)
     args.decoder_out_embed_dim = getattr(args, "decoder_out_embed_dim", 512)
     args.decoder_attention = getattr(args, "decoder_attention", "0")
     args.decoder_dropout_in = getattr(args, "decoder_dropout_in", args.dropout)
@@ -466,13 +522,13 @@ def base_architecture(args):
     )
     args.residuals = getattr(args, "residuals", False)
 
-@register_model_architecture("agent_lstm", "agent_lstm_big")
+@register_model_architecture("agent_lstm_4", "agent_lstm_4_big3")
 def base_architecture(args):
     args.dropout = getattr(args, "dropout", 0.1)
     args.decoder_embed_dim = getattr(args, "decoder_embed_dim", 512)
     args.decoder_embed_path = getattr(args, "decoder_embed_path", None)
     args.decoder_hidden_size = getattr(
-        args, "decoder_hidden_size", args.decoder_embed_dim
+        args, "decoder_hidden_size", 1024
     )
     args.decoder_layers = getattr(args, "decoder_layers", 4)
     args.decoder_out_embed_dim = getattr(args, "decoder_out_embed_dim", 512)
@@ -486,3 +542,4 @@ def base_architecture(args):
         args, "adaptive_softmax_cutoff", "10000,50000,200000"
     )
     args.residuals = getattr(args, "residuals", True)
+

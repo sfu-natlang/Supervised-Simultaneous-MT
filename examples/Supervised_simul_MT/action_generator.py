@@ -12,6 +12,7 @@ from fairseq import search, utils
 from fairseq.models import FairseqIncrementalDecoder
 from torch import Tensor
 from examples.Supervised_simul_MT.data import agent_utils
+from examples.Supervised_simul_MT.models.agent_lstm_4 import AgentLSTMModel4
 from examples.Supervised_simul_MT.models.agent_lstm_3 import AgentLSTMModel3
 from examples.Supervised_simul_MT.models.agent_lstm_2 import AgentLSTMModel2
 from examples.Supervised_simul_MT.models.agent_lstm import AgentLSTMModel
@@ -40,7 +41,7 @@ class ActionGenerator(nn.Module):
             lm_model=None,
             lm_weight=1.0,
             has_target=True,
-            all_features = False
+            agent_arch=None
     ):
         """Generates translations of a given source sentence.
 
@@ -95,8 +96,7 @@ class ActionGenerator(nn.Module):
         self.no_repeat_ngram_size = no_repeat_ngram_size
 
         # If True then _generate() returns Encoder and Decoder outputs as well.
-        self.all_features = all_features
-
+        self.all_features = False if agent_arch == 'agent_lstm' else True
         self.has_target = has_target
 
         assert temperature > 0, "--temperature must be greater than 0"
@@ -347,7 +347,6 @@ class ActionGenerator(nn.Module):
             bos_token (int, optional): beginning of sentence token
                 (default: self.eos)
         """
-        self.all_features = True
         incremental_samples = self.extract_incremental_samples(sample)
         for i in range(sample['net_input']['src_tokens'].shape[1]):
             subsample = {
@@ -1185,7 +1184,9 @@ class SimultaneousGenerator(nn.Module):
             self.agent_models = EnsembleModel(agent_models)
 
         for model in self.agent_models.models:
-            if isinstance(model, AgentLSTMModel3):
+            if isinstance(model, AgentLSTMModel4):
+                self.task.args.arch = "agent_lstm_4"
+            elif isinstance(model, AgentLSTMModel3):
                 self.task.args.arch = "agent_lstm_3"
             elif isinstance(model, AgentLSTMModel2):
                 self.task.args.arch = "agent_lstm_2"
