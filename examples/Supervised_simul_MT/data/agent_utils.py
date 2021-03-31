@@ -39,7 +39,11 @@ def generate_incremental_net_input(hypos, num_src=7, src_pad=1, trg_pad=1):
                 trg_tokens = trg_pad
             else:
                 trg_tokens = hypo['subsets'][num_read-1]['tokens'][num_write]
-            input_elements = torch.cat((src_tokens.type(torch.LongTensor), torch.tensor([trg_tokens], device=hypos[0]['src_tokens'].device).type(torch.LongTensor)))
+            input_elements = torch.cat((src_tokens.type(torch.LongTensor),
+                                        torch.tensor(
+                                            [trg_tokens],
+                                            device=hypos[0]['src_tokens'].device
+                                        ).type(torch.LongTensor)))
             sub_input[j-1] = input_elements
         final_input[i][:sub_input.shape[0]] = sub_input
     return final_input
@@ -119,7 +123,7 @@ def prepare_input(hypos, net_input, sample, agt_dict):
 
 def prepare_simultaneous_input(hypos, sample, task):
     agt_dict = task.agent_dictionary
-    if task.args.arch == "agent_lstm":
+    if task.args.arch in ["agent_lstm", "agent_lstm_big", "agent_lstm_0", "agent_lstm_0_big"]:
         net_input = generate_incremental_net_input(
             hypos, num_src=1,
             src_pad=task.source_dictionary.pad_index,
@@ -131,57 +135,45 @@ def prepare_simultaneous_input(hypos, sample, task):
         return prepare_input(hypos, net_input, sample, agt_dict)
 
 
-def infer_input_features(hypos, previous_actions):
+def infer_input_features(hypos, previous_actions, all_features=True):
     bsz = len(hypos)
-    eos = 2
     pad = 1
-    encoder_embed_dim = hypos[0][0]['encoder_out'].shape[1]
-    decoder_embed_dim = hypos[0][0]['decoder_out'].shape[1]
-    feat_len = 1 + encoder_embed_dim + decoder_embed_dim
+    device = hypos[0][0]['tokens'].device
+    if all_features:
+        encoder_embed_dim = hypos[0][0]['encoder_out'].shape[1]
+        decoder_embed_dim = hypos[0][0]['decoder_out'].shape[1]
+        feat_len = 1 + encoder_embed_dim + decoder_embed_dim
+    else:
+        feat_len = 2
+
     num_writes = torch.sum(torch.eq(previous_actions, 5), dim=1)
     num_reads = torch.sum(torch.eq(previous_actions, 4), dim=1)
 
-    final_features = torch.zeros(
-        bsz, feat_len,
-        dtype=torch.float,
-        device=hypos[0][0]['encoder_out'].device
-    )
-    src_tokens = torch.zeros(
-        bsz,
-        dtype=torch.int,
-        device=hypos[0][0]['encoder_out'].device
-    )
-    trg_tokens = torch.zeros(
-        bsz,
-        dtype=torch.int,
-        device=hypos[0][0]['encoder_out'].device
-    )
+    final_features = torch.zeros(bsz, feat_len, dtype=torch.float, device=device)
+    src_tokens = torch.zeros(bsz, dtype=torch.int, device=device)
+    trg_tokens = torch.zeros(bsz, dtype=torch.int, device=device)
+
     for i, hypo in enumerate(hypos):
         num_read = int(num_reads[i])
         num_write = int(num_writes[i])
+        send_padding = True if num_write > 1 and num_write >= len(hypo[num_read - 1]['tokens']) else False
 
-        # # This is wrong
-        # # The last write is EOS. We just need to continue to read more source words.
-        # if num_write > 1 and num_write >= len(hypo[num_read-1]['tokens']):
-        #     num_write = len(hypo[num_read-1]['tokens'])-1
-
-        src_embedding = hypo[num_read-1]['encoder_out'][num_read-1]
         # We will use src and trg tokens for checking stopping criteria in the Agent.
         src_tokens[i] = hypo[-1]['src_tokens'][num_read - 1]
+        trg_tokens[i] = hypo[num_read-1]['tokens'][num_write] if not send_padding else pad
 
-        # The last write is EOS. We just need to continue to read more source words.
-        if num_write > 1 and num_write >= len(hypo[num_read - 1]['tokens']):
-            trg_embedding = torch.zeros(decoder_embed_dim)
-            trg_tokens[i] = pad
-            attention = 0
+        if all_features:
+            src_embedding = hypo[num_read - 1]['encoder_out'][num_read - 1]
+            trg_embedding = hypo[num_read - 1]['decoder_out'][num_write] \
+                if not send_padding else torch.zeros(decoder_embed_dim)
+            attention = torch.mean(hypo[num_read - 1]['attention'][:, num_write]) \
+                if not send_padding else 0
+            final_features[i][:encoder_embed_dim] = src_embedding
+            final_features[i][encoder_embed_dim:feat_len-1] = trg_embedding
+            final_features[i][-1] = attention
         else:
-            trg_embedding = hypo[num_read-1]['decoder_out'][num_write]
-            trg_tokens[i] = hypo[num_read-1]['tokens'][num_write]
-            attention = torch.mean(hypo[num_read-1]['attention'][:, num_write])
-
-        final_features[i][:encoder_embed_dim] = src_embedding
-        final_features[i][encoder_embed_dim:feat_len-1] = trg_embedding
-        final_features[i][-1] = attention
+            final_features[i] = torch.cat((torch.tensor([src_tokens[i]], device=device).type(torch.LongTensor),
+                                           torch.tensor([trg_tokens[i]], device=device).type(torch.LongTensor)))
     final_dict = {
         'src_tokens': src_tokens,
         'trg_tokens': trg_tokens,

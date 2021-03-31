@@ -23,8 +23,8 @@ from torch import Tensor
 DEFAULT_MAX_TARGET_POSITIONS = 1e5
 
 
-@register_model("agent_lstm")
-class AgentLSTMModel(FairseqLanguageModel):
+@register_model("agent_lstm_0")
+class AgentLSTMModel0(FairseqLanguageModel):
     def __init__(self, decoder):
         super().__init__(decoder)
 
@@ -204,12 +204,12 @@ class LSTMDecoder(FairseqIncrementalDecoder):
         else:
             self.encoder_hidden_proj = self.encoder_cell_proj = None
 
-        self.additional_embedding = Linear(3*embed_dim, embed_dim)
+        self.additional_embedding = Linear(2*embed_dim, embed_dim)
 
         self.layers = nn.ModuleList(
             [
                 LSTMCell(
-                    input_size=embed_dim
+                    input_size=2*embed_dim
                     if layer == 0
                     else hidden_size,
                     hidden_size=hidden_size,
@@ -277,11 +277,11 @@ class LSTMDecoder(FairseqIncrementalDecoder):
         x2 = self.trg_embed_tokens(trg_tokens)
         x3 = self.agt_embed_tokens(prev_output_tokens)
 
-        x = torch.cat((x1, x2, x3), dim=2)
+        x_nmt = self.additional_embedding(torch.cat((x1, x2), dim=2))
+
+        x = torch.cat((x3, x_nmt), dim=2)
 
         x = self.dropout_in_module(x)
-
-        x = self.additional_embedding(x)
 
         # B x T x C -> T x B x C
         x = x.transpose(0, 1)
@@ -446,7 +446,7 @@ def Linear(in_features, out_features, bias=True, dropout=0.0):
     return m
 
 
-@register_model_architecture("agent_lstm", "agent_lstm")
+@register_model_architecture("agent_lstm_0", "agent_lstm_0")
 def base_architecture(args):
     args.dropout = getattr(args, "dropout", 0.1)
     args.decoder_embed_dim = getattr(args, "decoder_embed_dim", 1024)
@@ -467,7 +467,7 @@ def base_architecture(args):
     )
     args.residuals = getattr(args, "residuals", False)
 
-@register_model_architecture("agent_lstm", "agent_lstm_big")
+@register_model_architecture("agent_lstm_0", "agent_lstm_0_big")
 def base_architecture(args):
     args.dropout = getattr(args, "dropout", 0.1)
     args.decoder_embed_dim = getattr(args, "decoder_embed_dim", 512)

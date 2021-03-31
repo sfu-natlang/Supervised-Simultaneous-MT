@@ -222,6 +222,8 @@ class SupervisedSimulTranslationTask(TranslationTask):
                             help='Path to the fully trained NMT model')
         parser.add_argument('--eval-waitk', metavar="waitk", default=7, type=int,
                             help='Amount of k for evaluating waitk model')
+        parser.add_argument('--mt-teacher-forcing-rate', metavar="tfrate", default=1., type=float,
+                            help='rate of using previous target word for generating partial translations.')
 
         # options for reporting BLEU during validation
         parser.add_argument('--eval-bleu', action='store_true',
@@ -369,6 +371,7 @@ class SupervisedSimulTranslationTask(TranslationTask):
             search_strategy=search_strategy,
             has_target=self.has_target,
             agent_arch=getattr(args, "arch", 'agent_lstm_3'),
+            teacher_forcing_rate=getattr(args, "mt_teacher_forcing_rate", 1.),
             **extra_gen_cls_kwargs,
         )
 

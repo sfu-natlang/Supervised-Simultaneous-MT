@@ -4,6 +4,7 @@
 # LICENSE file in the root directory of this source tree.
 
 import math
+import random
 from typing import Dict, List, Optional
 
 import torch
@@ -16,6 +17,7 @@ from examples.Supervised_simul_MT.models.agent_lstm_4 import AgentLSTMModel4
 from examples.Supervised_simul_MT.models.agent_lstm_3 import AgentLSTMModel3
 from examples.Supervised_simul_MT.models.agent_lstm_2 import AgentLSTMModel2
 from examples.Supervised_simul_MT.models.agent_lstm import AgentLSTMModel
+from examples.Supervised_simul_MT.models.agent_lstm_0 import AgentLSTMModel0
 from examples.Supervised_simul_MT.models import waitk_transformer
 
 
@@ -41,7 +43,8 @@ class ActionGenerator(nn.Module):
             lm_model=None,
             lm_weight=1.0,
             has_target=True,
-            agent_arch=None
+            agent_arch=None,
+            teacher_forcing_rate=1.
     ):
         """Generates translations of a given source sentence.
 
@@ -96,8 +99,10 @@ class ActionGenerator(nn.Module):
         self.no_repeat_ngram_size = no_repeat_ngram_size
 
         # If True then _generate() returns Encoder and Decoder outputs as well.
-        self.all_features = False if agent_arch == 'agent_lstm' else True
+        self.simple_models = ['agent_lstm', 'agent_lstm_0', 'agent_lstm_big', 'agent_lstm_0_big']
+        self.all_features = False if agent_arch in self.simple_models else True
         self.has_target = has_target
+        self.teacher_forcing_rate = teacher_forcing_rate
 
         assert temperature > 0, "--temperature must be greater than 0"
 
@@ -354,7 +359,8 @@ class ActionGenerator(nn.Module):
             }
             subsample['net_input'] = incremental_samples['net_input'][i]
 
-            partial_translation = self._generate_train(subsample) if self.has_target \
+            partial_translation = self._generate_train(subsample) \
+                if self.has_target and random.random() <= self.teacher_forcing_rate \
                 else self._generate(subsample, **kwargs)
 
             if i == 0:
@@ -1192,6 +1198,8 @@ class SimultaneousGenerator(nn.Module):
                 self.task.args.arch = "agent_lstm_2"
             elif isinstance(model, AgentLSTMModel):
                 self.task.args.arch = "agent_lstm"
+            elif isinstance(model, AgentLSTMModel0):
+                self.task.args.arch = "agent_lstm_0"
             else:
                 raise NotImplementedError(
                     "The Agent is coming from an unknown model"
@@ -1289,13 +1297,19 @@ class SimultaneousGenerator(nn.Module):
                 (default: self.eos)
         """
 
+        if isinstance(self.agent_models.models[0], AgentLSTMModel):
+            agent_arch = "agent_lstm"
+        elif isinstance(self.agent_models.models[0], AgentLSTMModel0):
+            agent_arch = "agent_lstm_0"
+        else:
+            agent_arch = None
         action_generator = ActionGenerator(self.nmt_models, self.tgt_dict, self.src_dict,
                                            beam_size=self.beam_size, max_len_a=self.max_len_a, max_len_b=self.max_len_b,
                                            min_len=self.min_len, normalize_scores=self.normalize_scores,
                                            len_penalty=self.len_penalty, unk_penalty=self.unk_penalty,
                                            temperature=self.temperature, match_source_len=self.match_source_len,
                                            no_repeat_ngram_size=self.no_repeat_ngram_size, search_strategy=None,
-                                           has_target=self.has_target)
+                                           has_target=self.has_target, agent_arch=agent_arch)
         hypos = action_generator.generate(models, sample)
 #        input_hypos = agent_utils.prepare_simultaneous_input(hypos, sample, self.task)
 
@@ -1325,9 +1339,14 @@ class SimultaneousGenerator(nn.Module):
         bsz = len(subsets)
         beam_size = self.beam_size
         device = subsets[0][0]['tokens'].device
-        feat_len = 1 + subsets[0][0]['encoder_out'].shape[1] + subsets[0][0]['decoder_out'].shape[1]
+
+        if isinstance(self.agent_models.models[0], AgentLSTMModel):
+            feat_len = 2
+        else:
+            feat_len = 1 + subsets[0][0]['encoder_out'].shape[1] + subsets[0][0]['decoder_out'].shape[1]
 
         num_reads = 1
+        all_features = False if isinstance(self.agent_models.models[0], AgentLSTMModel) else True
 
         if constraints is not None and not self.search.supports_constraints:
             raise NotImplementedError(
@@ -1349,10 +1368,7 @@ class SimultaneousGenerator(nn.Module):
             torch.zeros(bsz, max_len + 1).to(device).float()
         )  # +1 for eos; pad is never chosen for scoring
         prior_outputs = (
-            torch.zeros(bsz, max_len + 2)
-                .to(device)
-                .long()
-                .fill_(self.pad)
+            torch.zeros(bsz, max_len + 2).to(device).long().fill_(self.pad)
         )  # +2 for eos and pad
 
         # Our agent do not generate the first action, since it's always READ.
@@ -1379,34 +1395,23 @@ class SimultaneousGenerator(nn.Module):
         ]  # a boolean array indicating if the sentence at the index is finished or not
         num_remaining_sent = bsz  # number of sentences remaining
 
-        prior_inputs = (
-            torch.zeros(bsz, max_len + 2, feat_len)
-                .to(device)
-                .float()
-        )  # +2 for eos and pad
+        prior_inputs = (torch.zeros(bsz, max_len + 2, feat_len).to(device).float()) if all_features \
+            else (torch.zeros(bsz, max_len + 2, feat_len).to(device).long()) # +2 for eos and pad
 
         # The tokens we send at each step. Will be used to determine when to stop.
         prior_src_tokens = (
-            torch.zeros(bsz, max_len + 2)
-                .to(device)
-                .int()
+            torch.zeros(bsz, max_len + 2).to(device).int()
         )  # +2 for eos and pad
         prior_trg_tokens = (
-            torch.zeros(bsz, max_len + 2)
-                .to(device)
-                .int()
+            torch.zeros(bsz, max_len + 2).to(device).int()
         )  # +2 for eos and pad
 
         reorder_state: Optional[Tensor] = None
-        batch_idxs = torch.arange(
-            bsz, device=device
-        )
+        batch_idxs = torch.arange(bsz, device=device)
 
         # Will store translated tokens selected by the Agent.
         selected_tokens = (
-            torch.zeros(bsz, max_len + 2)
-                .to(device)
-                .int()
+            torch.zeros(bsz, max_len + 2).to(device).int()
         )
 
         for step in range(max_len + 1):  # one extra step for EOS marker
@@ -1414,7 +1419,7 @@ class SimultaneousGenerator(nn.Module):
             if reorder_state is not None:
                 self.agent_models.reorder_incremental_state(incremental_states, reorder_state)
             new_subsets = [subsets[index] for index in batch_idxs]
-            current_input = agent_utils.infer_input_features(new_subsets, prior_outputs[:, :step+1])
+            current_input = agent_utils.infer_input_features(new_subsets, prior_outputs[:, :step+1], all_features)
             prior_inputs[:, step, :] = current_input['input_features']
             prior_src_tokens[:, step] = current_input['src_tokens']
             prior_trg_tokens[:, step] = current_input['trg_tokens']
@@ -1438,6 +1443,11 @@ class SimultaneousGenerator(nn.Module):
                 torch.tensor(-math.inf, dtype=torch.float32, device=device),
                 lprobs[:, self.read].float()
             )
+            lprobs[:, self.write] = torch.where(
+                prior_trg_tokens[:, step].eq(self.pad),
+                torch.tensor(-math.inf, dtype=torch.float32, device=device),
+                lprobs[:, self.write].float()
+            )
             if step > 0:
                 lprobs[:, self.write] = torch.where(
                     prior_trg_tokens[:, step-1].eq(self.eos),
@@ -1451,9 +1461,17 @@ class SimultaneousGenerator(nn.Module):
                     torch.tensor(math.inf, dtype=torch.float32, device=device),
                     lprobs[:, self.eos].float()
                 )
+                if not all_features:
+                    lprobs[:, self.eos] = torch.where(
+                        prior_src_tokens[:, step].eq(self.eos) &
+                        prior_trg_tokens[:, step].eq(self.pad),
+                        torch.tensor(math.inf, dtype=torch.float32, device=device),
+                        lprobs[:, self.eos].float()
+                    )
 
             # handle max length constraint
             if step >= max_len:
+                lprobs[:, self.eos] = math.inf
                 lprobs[:, : self.eos] = -math.inf
                 lprobs[:, self.eos + 1:] = -math.inf
 
@@ -1516,7 +1534,6 @@ class SimultaneousGenerator(nn.Module):
             # finished hypotheses have been generated) from the batch.
             if len(finalized_sents) > 0:
                 new_bsz = bsz - len(finalized_sents)
-                feat_len = prior_inputs.shape[2]
 
                 # TODO replace `nonzero(as_tuple=False)` after TorchScript supports it
                 batch_idxs = torch.index_select(
