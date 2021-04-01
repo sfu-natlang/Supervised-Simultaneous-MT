@@ -8,21 +8,19 @@ import logging
 import os
 import torch
 
-from fairseq import search, checkpoint_utils, utils
+from fairseq import search, utils
 from fairseq.data import (
     AppendTokenDataset,
     ConcatDataset,
-    LanguagePairDataset,
+    # LanguagePairDataset,
     PrependTokenDataset,
     StripTokenDataset,
     TruncateDataset,
     data_utils,
     indexed_dataset,
-    Dictionary,
 )
-
-from fairseq import tasks
-from fairseq.tasks import register_task, fairseq_task
+from examples.Supervised_simul_MT.data import LanguageActionPairDataset
+from fairseq.tasks import register_task
 from fairseq.tasks.translation import TranslationTask
 
 EVAL_BLEU_ORDER = 4
@@ -37,6 +35,8 @@ def load_langpair_dataset(
         src_dict,
         tgt,
         tgt_dict,
+        act,
+        act_dict,
         combine,
         dataset_impl,
         upsample_primary,
@@ -58,6 +58,7 @@ def load_langpair_dataset(
 
     src_datasets = []
     tgt_datasets = []
+    act_datasets = []
 
     for k in itertools.count():
         split_k = split + (str(k) if k > 0 else "")
@@ -94,6 +95,13 @@ def load_langpair_dataset(
         if tgt_dataset is not None:
             tgt_datasets.append(tgt_dataset)
 
+        if act is not None:
+            act_dataset = data_utils.load_indexed_dataset(
+                prefix + act, act_dict, dataset_impl
+            )
+            act_datasets.append(act_dataset)
+
+
         logger.info(
             "{} {} {}-{} {} examples".format(
                 data_path, split_k, src, tgt, len(src_datasets[-1])
@@ -104,10 +112,12 @@ def load_langpair_dataset(
             break
 
     assert len(src_datasets) == len(tgt_datasets) or len(tgt_datasets) == 0
+    assert len(src_datasets) == len(act_datasets) or len(act_datasets) == 0
 
     if len(src_datasets) == 1:
         src_dataset = src_datasets[0]
         tgt_dataset = tgt_datasets[0] if len(tgt_datasets) > 0 else None
+        act_dataset = act_datasets[0] if len(act_datasets) > 0 else None
     else:
         sample_ratios = [1] * len(src_datasets)
         sample_ratios[0] = upsample_primary
@@ -116,12 +126,18 @@ def load_langpair_dataset(
             tgt_dataset = ConcatDataset(tgt_datasets, sample_ratios)
         else:
             tgt_dataset = None
+        if len(act_datasets) > 0:
+            act_dataset = ConcatDataset(act_datasets, sample_ratios)
+        else:
+            act_dataset = None
 
     if prepend_bos:
         assert hasattr(src_dict, "bos_index") and hasattr(tgt_dict, "bos_index")
         src_dataset = PrependTokenDataset(src_dataset, src_dict.bos())
         if tgt_dataset is not None:
             tgt_dataset = PrependTokenDataset(tgt_dataset, tgt_dict.bos())
+        if act_dataset is not None:
+            act_dataset = PrependTokenDataset(act_dataset, act_dict.bos())
 
     eos = None
     if append_source_id:
@@ -133,6 +149,10 @@ def load_langpair_dataset(
                 tgt_dataset, tgt_dict.index("[{}]".format(tgt))
             )
         eos = tgt_dict.index("[{}]".format(tgt))
+        if act_dataset is not None:
+            act_dataset = AppendTokenDataset(
+                act_dataset, act_dict.index("[{}]".format(act))
+            )
 
     align_dataset = None
     if load_alignments:
@@ -143,13 +163,18 @@ def load_langpair_dataset(
             )
 
     tgt_dataset_sizes = tgt_dataset.sizes if tgt_dataset is not None else None
-    return LanguagePairDataset(
+    act_dataset_sizes = act_dataset.sizes if act_dataset is not None else None
+
+    return LanguageActionPairDataset(
         src_dataset,
         src_dataset.sizes,
         src_dict,
         tgt_dataset,
         tgt_dataset_sizes,
         tgt_dict,
+        act_dataset,
+        act_dataset_sizes,
+        act_dict,
         left_pad_source=left_pad_source,
         left_pad_target=left_pad_target,
         align_dataset=align_dataset,
@@ -216,6 +241,8 @@ class SupervisedSimulTranslationTask(TranslationTask):
         parser.add_argument('--has-target', default='True', type=str, metavar='BOOL',
                             help='if True uses target words in order to generate'
                                  'NMT translation. Set it to False for inference')
+        parser.add_argument('--has-reference-action', action='store_true',
+                            help='if True loads reference action sequences in order to use during inference.')
         parser.add_argument('--agent-path', metavar="AGTPATH", default=None,
                             help='Path to the fully trained agent model')
         parser.add_argument('--nmt-path', metavar="NMTPATH", default=None,
@@ -265,7 +292,8 @@ class SupervisedSimulTranslationTask(TranslationTask):
         """
         task = super().setup_task(args)
         paths = utils.split_paths(args.data)
-        #agent_dict = Dictionary()
+        if args.has_reference_action:
+            args.action_lang = 'agent'
         task.agent_dictionary = cls.load_dictionary(
             os.path.join(paths[0], "dict.agent.txt".format(args.source_lang))
         )
@@ -504,3 +532,43 @@ class SupervisedSimulTranslationTask(TranslationTask):
         with torch.autograd.profiler.record_function("backward"):
             optimizer.backward(loss)
         return loss, sample_size, logging_output
+
+    def load_dataset(self, split, epoch=1, combine=False, **kwargs):
+        """Load a given dataset split.
+
+        Args:
+            split (str): name of the split (e.g., train, valid, test)
+        """
+        paths = utils.split_paths(self.args.data)
+        assert len(paths) > 0
+        if split != getattr(self.args, "train_subset", None):
+            # if not training data set, use the first shard for valid and test
+            paths = paths[:1]
+        data_path = paths[(epoch - 1) % len(paths)]
+
+        # infer langcode
+        src, tgt = self.args.source_lang, self.args.target_lang
+        act = self.args.action_lang if self.args.has_reference_action else None
+
+        self.datasets[split] = load_langpair_dataset(
+            data_path,
+            split,
+            src,
+            self.src_dict,
+            tgt,
+            self.tgt_dict,
+            act,
+            self.agent_dictionary,
+            combine=combine,
+            dataset_impl=self.args.dataset_impl,
+            upsample_primary=self.args.upsample_primary,
+            left_pad_source=self.args.left_pad_source,
+            left_pad_target=self.args.left_pad_target,
+            max_source_positions=self.args.max_source_positions,
+            max_target_positions=self.args.max_target_positions,
+            load_alignments=self.args.load_alignments,
+            truncate_source=self.args.truncate_source,
+            num_buckets=self.args.num_batch_buckets,
+            shuffle=(split != "test"),
+            pad_to_multiple=self.args.required_seq_len_multiple,
+        )
