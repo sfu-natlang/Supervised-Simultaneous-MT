@@ -22,6 +22,7 @@ def generate_incremental_net_input(hypos, num_src=7, src_pad=1, trg_pad=1):
             # num read and write at previous time step
             num_write = sum(hypo['action_seq'][:j])
             num_read = len(hypo['action_seq'][:j]) - num_write
+
             src_tokens = pad_fixed_sequence(hypo['src_tokens'][num_read-num_src:num_read] if num_read >= num_src
                                             else hypo['src_tokens'][:num_read], padding=src_pad, seq_len=num_src)
 
@@ -133,6 +134,37 @@ def prepare_simultaneous_input(hypos, sample, task):
     else:
         net_input = generate_incremental_net_input_2(hypos)
         return prepare_input(hypos, net_input, sample, agt_dict)
+
+
+def modify_preprocessed_input(sample, task):
+    if task.args.arch.startswith("agent_lstm_5"):
+        num_prev_tokens = 3   # How many previous tokens should we send in each time
+        pad_index = task.agent_dictionary.pad_index
+
+        padded_sample = torch.empty(
+            sample['action_seq'].shape[0], sample['action_seq'].shape[1]+num_prev_tokens-1
+        ).fill_(pad_index)
+        prev_token = torch.empty(sample['action_seq'].shape[0], sample['action_seq'].shape[1]-1, num_prev_tokens)
+
+        padded_sample[:, num_prev_tokens-1:] = sample['action_seq']
+        for i in range(num_prev_tokens):
+            prev_token[:, :, i] = padded_sample[:, i:i-num_prev_tokens]
+    else:
+        prev_token = sample['action_seq'][:, :-1]
+    net_input = {
+        'src_tokens': torch.cat((sample['net_input']['src_tokens'].unsqueeze(2),
+                                 sample['target'].unsqueeze(2)), dim=2),
+        'src_lengths': sample['net_input']['src_lengths'],
+        'prev_output_tokens': prev_token.type(torch.LongTensor)
+    }
+    new_sample = {
+        'id': sample['id'],
+        'nsentences': sample['nsentences'],
+        'ntokens': sample['ntokens'],
+        'net_input': net_input,
+        'target': sample['action_seq'][:, 1:].contiguous()
+    }
+    return new_sample
 
 
 def infer_input_features(hypos, previous_actions, all_features=True):

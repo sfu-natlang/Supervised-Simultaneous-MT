@@ -8,7 +8,7 @@ from fairseq.models import (
     register_model, register_model_architecture,
 )
 
-from examples.pervasive.modules import (
+from examples.Supervised_simul_MT.modules import (
     build_convnet, build_aggregator,
 )
 

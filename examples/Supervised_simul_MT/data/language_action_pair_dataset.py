@@ -364,15 +364,22 @@ class LanguageActionPairDataset(FairseqDataset):
             # We don't need eos token in action sequence
             act_item = act_item[:-1] if act_item[-1] == self.act_dict.eos_index else act_item
 
+            # len of action sequence should be one element longer than src and trg
+            # sequences. One extra action at the beginning will be used in "previous action token".
+            if len(act_item) == len(src_item) and src_item[-1] == self.src_dict.eos_index:
+                src_item = src_item[:-1]
+            if len(act_item) == len(tgt_item) and tgt_item[-1] == self.tgt_dict.eos_index:
+                tgt_item = tgt_item[:-1]
+
             # add actions corresponding to EOS tokens in the src and trg tokens
-            if len(act_item) != (len(src_item) + len(tgt_item)):
-                new_act_item = torch.zeros(len(act_item)+2)
-                last_read_index = (act_item == 4).nonzero()[-1]
-                new_act_item[:last_read_index] = act_item[:last_read_index]
-                new_act_item[last_read_index] = self.act_dict.index('0')
-                new_act_item[last_read_index + 1: -1] = act_item[last_read_index:]
-                new_act_item[-1] = self.act_dict.index('1')
-                act_item = new_act_item
+            # if len(act_item) != (len(src_item) + len(tgt_item)):
+            #     new_act_item = torch.zeros(len(act_item)+2)
+            #     last_read_index = (act_item == 4).nonzero()[-1]
+            #     new_act_item[:last_read_index] = act_item[:last_read_index]
+            #     new_act_item[last_read_index] = self.act_dict.index('0')
+            #     new_act_item[last_read_index + 1: -1] = act_item[last_read_index:]
+            #     new_act_item[-1] = self.act_dict.index('1')
+            #     act_item = new_act_item
 
         example = {
             "id": index,

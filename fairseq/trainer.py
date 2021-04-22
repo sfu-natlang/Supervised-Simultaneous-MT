@@ -130,7 +130,8 @@ class Trainer(object):
         self._previous_training_time = 0
         self._cumulative_training_time = None
 
-        if self.task.args._name == 'Supervised_simultaneous_translation':
+        if self.task.args._name == 'Supervised_simultaneous_translation' and \
+                not self.task.args.has_reference_action:
             self.nmt_model, _args = checkpoint_utils.load_model_ensemble(
                 utils.split_paths(task.nmt_path),
                 arg_overrides={},
@@ -148,6 +149,7 @@ class Trainer(object):
                     model.cuda()
                 model.prepare_for_inference_(cfg)
                 cfg.task.constraints = False
+                model.decoder.waitk = task.eval_waitk
             self.generator = self.task.build_action_generator(
                 self.nmt_model, cfg.task, extra_gen_cls_kwargs=None
             )
@@ -529,6 +531,7 @@ class Trainer(object):
 
         # forward and backward pass
         logging_outputs, sample_size, ooms = [], 0, 0
+        is_dummy_batch = False
         for i, sample in enumerate(samples):
             if sample is None or len(sample) == 0:
                 continue
@@ -554,17 +557,20 @@ class Trainer(object):
                     # forward and backward
 
                     if self.task.args._name == 'Supervised_simultaneous_translation':
-                        prefix_tokens = None
-                        constraints = None
-                        if "constraints" in sample:
-                            constraints = sample["constraints"]
-                        with torch.no_grad():
-                            hypos = self.generator.generate(
-                                self.nmt_model, sample,
-                                prefix_tokens=prefix_tokens,
-                                constraints=constraints
-                            )
-                        sample = agent_utils.prepare_simultaneous_input(hypos, sample, self.task)
+                        if not self.task.args.has_reference_action:
+                            prefix_tokens = None
+                            constraints = None
+                            if "constraints" in sample:
+                                constraints = sample["constraints"]
+                            with torch.no_grad():
+                                hypos = self.generator.generate(
+                                    self.nmt_model, sample,
+                                    prefix_tokens=prefix_tokens,
+                                    constraints=constraints
+                                )
+                            sample = agent_utils.prepare_simultaneous_input(hypos, sample, self.task)
+                        else:
+                            sample = agent_utils.modify_preprocessed_input(sample, self.task)
 
                     loss, sample_size_i, logging_output = self.task.train_step(
                         sample=sample,
@@ -818,15 +824,18 @@ class Trainer(object):
 
             try:
                 if self.task.args._name == 'Supervised_simultaneous_translation':
-                    prefix_tokens = None
-                    constraints = None
-                    if "constraints" in sample:
-                        constraints = sample["constraints"]
-                    with torch.no_grad():
-                        hypos = self.generator.generate(
-                            self.nmt_model, sample, prefix_tokens=prefix_tokens, constraints=constraints
-                        )
-                    sample = agent_utils.prepare_simultaneous_input(hypos, sample, self.task)
+                    if not self.task.args.has_reference_action:
+                        prefix_tokens = None
+                        constraints = None
+                        if "constraints" in sample:
+                            constraints = sample["constraints"]
+                        with torch.no_grad():
+                            hypos = self.generator.generate(
+                                self.nmt_model, sample, prefix_tokens=prefix_tokens, constraints=constraints
+                            )
+                        sample = agent_utils.prepare_simultaneous_input(hypos, sample, self.task)
+                    else:
+                        sample = agent_utils.modify_preprocessed_input(sample, self.task)
 
                 _loss, sample_size, logging_output = self.task.valid_step(
                     sample, self.model, self.criterion

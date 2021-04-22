@@ -293,9 +293,9 @@ class SupervisedSimulTranslationTask(TranslationTask):
         task = super().setup_task(args)
         paths = utils.split_paths(args.data)
         if args.has_reference_action:
-            args.action_lang = 'agent'
+            args.action_lang = 'act'
         task.agent_dictionary = cls.load_dictionary(
-            os.path.join(paths[0], "dict.agent.txt".format(args.source_lang))
+            os.path.join(paths[0], "dict.act.txt".format(args.source_lang))
         )
         return task
 
@@ -398,7 +398,7 @@ class SupervisedSimulTranslationTask(TranslationTask):
             no_repeat_ngram_size=getattr(args, "no_repeat_ngram_size", 0),
             search_strategy=search_strategy,
             has_target=self.has_target,
-            agent_arch=getattr(args, "arch", 'agent_lstm_3'),
+            agent_arch=getattr(args, "arch", None),
             teacher_forcing_rate=getattr(args, "mt_teacher_forcing_rate", 1.),
             **extra_gen_cls_kwargs,
         )

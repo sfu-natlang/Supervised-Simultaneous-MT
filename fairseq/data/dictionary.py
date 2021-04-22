@@ -104,6 +104,47 @@ class Dictionary(object):
 
         return data_utils.post_process(sent, bpe_symbol)
 
+    def string_with_eos(
+        self,
+        tensor,
+        bpe_symbol=None,
+        escape_unk=False,
+        extra_symbols_to_ignore=None,
+        unk_string=None,
+        include_eos=False,
+    ):
+        """Helper for converting a tensor of token indices to a string.
+
+        Can optionally remove BPE symbols or escape <unk> words.
+        """
+        if torch.is_tensor(tensor) and tensor.dim() == 2:
+            return "\n".join(
+                self.string(t, bpe_symbol, escape_unk, extra_symbols_to_ignore, include_eos=include_eos)
+                for t in tensor
+            )
+
+        extra_symbols_to_ignore = set(extra_symbols_to_ignore or [])
+
+        def token_string(i):
+            if i == self.unk():
+                if unk_string is not None:
+                    return unk_string
+                else:
+                    return self.unk_string(escape_unk)
+            else:
+                return self[i]
+
+        if hasattr(self, "bos_index"):
+            extra_symbols_to_ignore.add(self.bos())
+
+        sent = " ".join(
+            token_string(i)
+            for i in tensor
+            if utils.item(i) not in extra_symbols_to_ignore
+        )
+
+        return data_utils.post_process(sent, bpe_symbol)
+
     def unk_string(self, escape=False):
         """Return unknown string, optionally escaped as: <<unk>>"""
         if escape:

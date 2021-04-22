@@ -13,6 +13,7 @@ from fairseq import search, utils
 from fairseq.models import FairseqIncrementalDecoder
 from torch import Tensor
 from examples.Supervised_simul_MT.data import agent_utils
+from examples.Supervised_simul_MT.models.agent_lstm_5 import AgentLSTMModel5
 from examples.Supervised_simul_MT.models.agent_lstm_4 import AgentLSTMModel4
 from examples.Supervised_simul_MT.models.agent_lstm_3 import AgentLSTMModel3
 from examples.Supervised_simul_MT.models.agent_lstm_2 import AgentLSTMModel2
@@ -99,7 +100,7 @@ class ActionGenerator(nn.Module):
         self.no_repeat_ngram_size = no_repeat_ngram_size
 
         # If True then _generate() returns Encoder and Decoder outputs as well.
-        self.simple_models = ['agent_lstm', 'agent_lstm_0', 'agent_lstm_big', 'agent_lstm_0_big']
+        self.simple_models = ['agent_lstm', 'agent_lstm_0', 'agent_lstm_big', 'agent_lstm_0_big', None]
         self.all_features = False if agent_arch in self.simple_models else True
         self.has_target = has_target
         self.teacher_forcing_rate = teacher_forcing_rate
@@ -221,13 +222,45 @@ class ActionGenerator(nn.Module):
 
         return src_str
 
+    def extend_sample(self, translations, sample):
+        net_input = sample['net_input']
+        action_seq = sample['action_seq']
+        extended_translation = []
+        for index, translation in enumerate(translations):
+            subsets_generated = [subset[0] for subset in translation]
+            extended_sample = translation[-1][0]
+            extended_sample['src_tokens'] = net_input['src_tokens'][index]
+            extended_sample['action_seq'] = action_seq[index]
+            extended_sample['subsets'] = subsets_generated
+
+            # Generating translations based on action sequences.
+            generateed_translation = []
+            i, j = 0, 0
+            read, write = 4, 5
+            for action in action_seq[index]:
+                if action == read:
+                    j = j + 1
+                else:
+                    generateed_translation.append(
+                        subsets_generated[j-1]['tokens'][i] if i < len(subsets_generated[j-1]['tokens'])
+                        else subsets_generated[j-1]['tokens'][-2]  # The last element is the eos token. We take the one before.
+                    )
+                    i = i + 1
+
+            extended_sample['tokens'] = generateed_translation
+            extended_translation.append(extended_sample)
+        return extended_translation
+
+
     def generate_action_sequence(self, translations, net_input=None, post_process=True):
         extended_translations = []
         src_tokens = net_input['src_tokens']
         src_lengths = net_input['src_lengths']
         for index, translation in enumerate(translations):
-            extended_translations.append(self._generate_action_sequence(translation, src_tokens[index],
-                                                                            src_lengths[index], post_process))
+            extended_translations.append(
+                self._generate_action_sequence(translation, src_tokens[index],
+                src_lengths[index], post_process)
+            )
         return extended_translations
 
     def _generate_action_sequence(self, sample, src_token, src_length, post_process):
@@ -258,15 +291,14 @@ class ActionGenerator(nn.Module):
             trg_length = len(trg_Gen)
 
         while i < trg_length:
-            # The last two translations are the same
-            if j + 2 == src_length:
-                action_seq.append(0)
-                j = j + 1
             subset = subsets_generated[j]['hypo_str'] if post_process else subsets_generated[j]['tokens']
             if i < len(subset) and subset[i] == trg_Gen[i]:
                 action_seq.append(1)
                 i = i + 1
             elif j + 1 < src_length:
+                if j + 3 == src_length:     # The last two translations are the same
+                    action_seq.append(0)
+                    j = j + 1
                 action_seq.append(0)
                 j = j + 1
         # Debug
@@ -369,6 +401,8 @@ class ActionGenerator(nn.Module):
                 for index, trans in enumerate(partial_translation):
                     translations[index].append(trans)
 
+        if sample['action_seq'] is not None:
+            return self.extend_sample(translations, sample)
         return self.generate_action_sequence(translations, sample['net_input'], post_process=False)
 
     def _generate_train(
@@ -1190,7 +1224,9 @@ class SimultaneousGenerator(nn.Module):
             self.agent_models = EnsembleModel(agent_models)
 
         for model in self.agent_models.models:
-            if isinstance(model, AgentLSTMModel4):
+            if isinstance(model, AgentLSTMModel5):
+                self.task.args.arch = "agent_lstm_5"
+            elif isinstance(model, AgentLSTMModel4):
                 self.task.args.arch = "agent_lstm_4"
             elif isinstance(model, AgentLSTMModel3):
                 self.task.args.arch = "agent_lstm_3"
@@ -1313,7 +1349,8 @@ class SimultaneousGenerator(nn.Module):
         hypos = action_generator.generate(models, sample)
 #        input_hypos = agent_utils.prepare_simultaneous_input(hypos, sample, self.task)
 
-        final_hypos = self._generate(hypos, **kwargs)
+        final_hypos = self._generate(hypos, **kwargs) if not isinstance(self.agent_models.models[0], AgentLSTMModel5) \
+            else self._generate_agent_5(hypos, **kwargs)
 
         return final_hypos
 
@@ -1340,13 +1377,15 @@ class SimultaneousGenerator(nn.Module):
         beam_size = self.beam_size
         device = subsets[0][0]['tokens'].device
 
-        if isinstance(self.agent_models.models[0], AgentLSTMModel):
+        if isinstance(self.agent_models.models[0], AgentLSTMModel) or \
+           isinstance(self.agent_models.models[0], AgentLSTMModel0):
             feat_len = 2
+            all_features = False
         else:
             feat_len = 1 + subsets[0][0]['encoder_out'].shape[1] + subsets[0][0]['decoder_out'].shape[1]
+            all_features = True
 
         num_reads = 1
-        all_features = False if isinstance(self.agent_models.models[0], AgentLSTMModel) else True
 
         if constraints is not None and not self.search.supports_constraints:
             raise NotImplementedError(
@@ -1564,6 +1603,284 @@ class SimultaneousGenerator(nn.Module):
             write_idx = torch.squeeze((write_mask == True).nonzero(), dim=1)
             if write_idx.numel() > 0:
                 num_writes = torch.sum(torch.eq(prior_outputs, 5), dim=1)
+                selected_tokens[batch_idxs, num_writes-1] = torch.where(
+                    write_mask,
+                    prior_trg_tokens[:, step],
+                    selected_tokens[batch_idxs, num_writes-1]
+                )
+
+            # copy attention for active hypotheses
+            if attn is not None:
+                attn[:, :, : step + 2] = torch.index_select(
+                    attn[:, :, : step + 2], dim=0, index=active_idx
+                )
+
+            # reorder incremental state in decoder
+            reorder_state = active_idx
+
+        # sort by score descending
+        for sent in range(len(finalized)):
+            scores = torch.tensor(
+                [float(elem["score"].item()) for elem in finalized[sent]]
+            )
+            _, sorted_scores_indices = torch.sort(scores, descending=True)
+            finalized[sent] = [finalized[sent][ssi] for ssi in sorted_scores_indices]
+            finalized[sent] = torch.jit.annotate(
+                List[Dict[str, Tensor]], finalized[sent]
+            )
+        return finalized
+
+    def _generate_agent_5(
+            self,
+            sample,
+            prefix_tokens: Optional[Tensor] = None,
+            constraints: Optional[Tensor] = None,
+            bos_token: Optional[int] = None,
+    ):
+        incremental_states = torch.jit.annotate(
+            List[Dict[str, Dict[str, Optional[Tensor]]]],
+            [
+                torch.jit.annotate(Dict[str, Dict[str, Optional[Tensor]]], {})
+                for i in range(self.agent_models.models_size)
+            ],
+        )
+
+        subsets = [hypo['subsets'] for hypo in sample]
+
+        # bsz: total number of sentences in beam
+        # Note that src_tokens may have more than 2 dimenions (i.e. audio features)
+        bsz = len(subsets)
+        beam_size = self.beam_size
+        device = subsets[0][0]['tokens'].device
+
+        if isinstance(self.agent_models.models[0], AgentLSTMModel) or \
+           isinstance(self.agent_models.models[0], AgentLSTMModel0) or \
+           isinstance(self.agent_models.models[0], AgentLSTMModel5):
+            feat_len = 2
+            all_features = False
+        else:
+            feat_len = 1 + subsets[0][0]['encoder_out'].shape[1] + subsets[0][0]['decoder_out'].shape[1]
+            all_features = True
+
+        num_prev_tokens = 3
+
+        if constraints is not None and not self.search.supports_constraints:
+            raise NotImplementedError(
+                "Target-side constraints were provided, but search method doesn't support them"
+            )
+
+        # max action len
+        max_len = min(
+            int(2*self.max_len_b),
+            # exclude the EOS marker
+            self.agent_models.max_decoder_positions() - 1,
+            )
+        assert (
+                self.min_len <= max_len
+        ), "min_len cannot be larger than max_len, please adjust these!"
+
+        # initialize buffers
+        scores = (
+            torch.zeros(bsz, max_len + 1).to(device).float()
+        )  # +1 for eos; pad is never chosen for scoring
+        prior_outputs = (
+            torch.zeros(bsz, max_len + 2, num_prev_tokens).to(device).long().fill_(self.pad)
+        )  # +2 for eos and pad
+
+        # Our agent do not generate the first action, since it's always READ.
+        # So we pass READ as initial action.
+        prior_outputs[:, 0, -1] = self.read
+        attn: Optional[Tensor] = None
+
+        # A list that indicates candidates that should be ignored.
+        # For example, suppose we're sampling and have already finalized 2/5
+        # samples. Then cands_to_ignore would mark 2 positions as being ignored,
+        # so that we only finalize the remaining 3 samples.
+        cands_to_ignore = (
+            torch.zeros(bsz).to(device).eq(-1)
+        )  # forward and backward-compatible False mask
+
+        # list of completed sentences
+        finalized = torch.jit.annotate(
+            List[List[Dict[str, Tensor]]],
+            [torch.jit.annotate(List[Dict[str, Tensor]], []) for i in range(bsz)],
+        )  # contains lists of dictionaries of infomation about the hypothesis being finalized at each step
+
+        finished = [
+            False for i in range(bsz)
+        ]  # a boolean array indicating if the sentence at the index is finished or not
+        num_remaining_sent = bsz  # number of sentences remaining
+
+        prior_inputs = (torch.zeros(bsz, max_len + 2, feat_len).to(device).float()) if all_features \
+            else (torch.zeros(bsz, max_len + 2, feat_len).to(device).long()) # +2 for eos and pad
+
+        # The tokens we send at each step. Will be used to determine when to stop.
+        prior_src_tokens = (
+            torch.zeros(bsz, max_len + 2).to(device).int()
+        )  # +2 for eos and pad
+        prior_trg_tokens = (
+            torch.zeros(bsz, max_len + 2).to(device).int()
+        )  # +2 for eos and pad
+
+        reorder_state: Optional[Tensor] = None
+        batch_idxs = torch.arange(bsz, device=device)
+
+        # Will store translated tokens selected by the Agent.
+        selected_tokens = (
+            torch.zeros(bsz, max_len + 2).to(device).int()
+        )
+
+        for step in range(max_len + 1):  # one extra step for EOS marker
+            # reorder decoder internal states based on the prev choice of beams
+            if reorder_state is not None:
+                self.agent_models.reorder_incremental_state(incremental_states, reorder_state)
+            new_subsets = [subsets[index] for index in batch_idxs]
+            current_input = agent_utils.infer_input_features(new_subsets, prior_outputs[:, :step+1, -1], all_features)
+            prior_inputs[:, step, :] = current_input['input_features']
+            prior_src_tokens[:, step] = current_input['src_tokens']
+            prior_trg_tokens[:, step] = current_input['trg_tokens']
+
+            lprobs, avg_attn_scores = self.agent_models.forward_agent_decoder(
+                prior_inputs[:, :step+1, :],
+                prior_outputs[:, :step+1],
+                incremental_states,
+                self.temperature,
+            )
+
+            lprobs[lprobs != lprobs] = torch.tensor(-math.inf).to(lprobs)
+
+            lprobs[:, self.pad] = -math.inf  # never select pad
+            lprobs[:, self.unk] = -math.inf  # never select unk
+            lprobs[:, self.bos] = -math.inf  # never select bos
+            lprobs[:, self.eos] = -math.inf  # never select eos, except when we say so
+
+            lprobs[:, self.read] = torch.where(
+                prior_src_tokens[:, step].eq(self.eos),
+                torch.tensor(-math.inf, dtype=torch.float32, device=device),
+                lprobs[:, self.read].float()
+            )
+            lprobs[:, self.write] = torch.where(
+                prior_trg_tokens[:, step].eq(self.pad),
+                torch.tensor(-math.inf, dtype=torch.float32, device=device),
+                lprobs[:, self.write].float()
+            )
+            if step > 0:
+                lprobs[:, self.write] = torch.where(
+                    prior_trg_tokens[:, step-1].eq(self.eos),
+                    torch.tensor(-math.inf, dtype=torch.float32, device=device),
+                    lprobs[:, self.write].float()
+                )
+                lprobs[:, self.eos] = torch.where(
+                    prior_src_tokens[:, step].eq(self.eos) &
+                    prior_trg_tokens[:, step].eq(self.eos) &
+                    prior_trg_tokens[:, step-1].eq(self.eos),
+                    torch.tensor(math.inf, dtype=torch.float32, device=device),
+                    lprobs[:, self.eos].float()
+                )
+                if not all_features:
+                    lprobs[:, self.eos] = torch.where(
+                        prior_src_tokens[:, step].eq(self.eos) &
+                        prior_trg_tokens[:, step].eq(self.pad),
+                        torch.tensor(math.inf, dtype=torch.float32, device=device),
+                        lprobs[:, self.eos].float()
+                    )
+
+            # handle max length constraint
+            if step >= max_len:
+                lprobs[:, self.eos] = math.inf
+                lprobs[:, : self.eos] = -math.inf
+                lprobs[:, self.eos + 1:] = -math.inf
+
+            # handle prefix tokens (possibly with different lengths)
+            if (
+                    prefix_tokens is not None
+                    and step < prefix_tokens.size(1)
+                    and step < max_len
+            ):
+                lprobs, tokens, scores = self._prefix_tokens(
+                    step, lprobs, scores, tokens, prefix_tokens, beam_size
+                )
+
+            # Record attention scores, only support avg_attn_scores is a Tensor
+            if avg_attn_scores is not None:
+                if attn is None:
+                    attn = torch.empty(
+                        bsz * beam_size, avg_attn_scores.size(1), max_len + 2
+                    ).to(scores)
+                attn[:, :, step + 1].copy_(avg_attn_scores)
+
+            scores = scores.type_as(lprobs)
+
+            if self.no_repeat_ngram_size > 0:
+                lprobs = self._no_repeat_ngram(prior_outputs, lprobs, bsz, beam_size, step)
+
+            top_predictions = torch.topk(lprobs, k=1)
+            indices = torch.squeeze(top_predictions[1])
+
+            if indices.dim()==0:
+                indices = torch.unsqueeze(indices, dim=0)
+
+            eos_mask = indices.eq(self.eos)
+            eos_idx = torch.squeeze((eos_mask == True).nonzero(), dim=1)
+            active_idx = torch.squeeze((eos_mask == False).nonzero(), dim=1)
+
+            finalized_sents: List[int] = []
+            if eos_idx.numel() > 0:
+                finalized_sents = self.finalize_hypos(
+                    step,
+                    eos_idx,
+                    batch_idxs,
+                    prior_outputs[:, :, -1],
+                    selected_tokens,
+                    scores,
+                    finalized,
+                    finished,
+                    attn,
+                )
+                num_remaining_sent -= len(finalized_sents)
+
+            assert num_remaining_sent >= 0
+            if num_remaining_sent == 0:
+                break
+            if self.search.stop_on_max_len and step >= max_len:
+                break
+            assert step < max_len, f"{step} < {max_len}"
+
+            # Remove finalized sentences (ones for which {beam_size}
+            # finished hypotheses have been generated) from the batch.
+            if len(finalized_sents) > 0:
+                new_bsz = bsz - len(finalized_sents)
+
+                # TODO replace `nonzero(as_tuple=False)` after TorchScript supports it
+                batch_idxs = torch.index_select(
+                    batch_idxs, dim=0, index=active_idx
+                )
+
+                indices = indices[active_idx]
+
+                if prefix_tokens is not None:
+                    prefix_tokens = prefix_tokens[active_idx]
+                cands_to_ignore = cands_to_ignore[active_idx]
+
+                scores = scores[active_idx]
+                prior_outputs = prior_outputs[active_idx]
+                prior_inputs = prior_inputs[active_idx]
+                prior_src_tokens = prior_src_tokens[active_idx]
+                prior_trg_tokens = prior_trg_tokens[active_idx]
+                if attn is not None:
+                    attn = attn.view(bsz, -1)[active_idx].view(
+                        new_bsz * beam_size, attn.size(1), -1
+                    )
+                bsz = new_bsz
+
+            # Select the next token for each of them
+            prior_outputs[:, step + 1, :-1] = prior_outputs[:, step, 1:]
+            prior_outputs[:, step + 1, -1] = indices
+
+            write_mask = indices.eq(self.write)
+            write_idx = torch.squeeze((write_mask == True).nonzero(), dim=1)
+            if write_idx.numel() > 0:
+                num_writes = torch.sum(torch.eq(prior_outputs[:, :, -1], 5), dim=1)
                 selected_tokens[batch_idxs, num_writes-1] = torch.where(
                     write_mask,
                     prior_trg_tokens[:, step],
