@@ -371,16 +371,6 @@ class LanguageActionPairDataset(FairseqDataset):
             if len(act_item) == len(tgt_item) and tgt_item[-1] == self.tgt_dict.eos_index:
                 tgt_item = tgt_item[:-1]
 
-            # add actions corresponding to EOS tokens in the src and trg tokens
-            # if len(act_item) != (len(src_item) + len(tgt_item)):
-            #     new_act_item = torch.zeros(len(act_item)+2)
-            #     last_read_index = (act_item == 4).nonzero()[-1]
-            #     new_act_item[:last_read_index] = act_item[:last_read_index]
-            #     new_act_item[last_read_index] = self.act_dict.index('0')
-            #     new_act_item[last_read_index + 1: -1] = act_item[last_read_index:]
-            #     new_act_item[-1] = self.act_dict.index('1')
-            #     act_item = new_act_item
-
         example = {
             "id": index,
             "source": src_item,

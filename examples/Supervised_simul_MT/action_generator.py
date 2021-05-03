@@ -45,7 +45,8 @@ class ActionGenerator(nn.Module):
             lm_weight=1.0,
             has_target=True,
             agent_arch=None,
-            teacher_forcing_rate=1.
+            teacher_forcing_rate=1.,
+            distort_action_sequence=False,
     ):
         """Generates translations of a given source sentence.
 
@@ -104,6 +105,7 @@ class ActionGenerator(nn.Module):
         self.all_features = False if agent_arch in self.simple_models else True
         self.has_target = has_target
         self.teacher_forcing_rate = teacher_forcing_rate
+        self.distort_action_sequence = distort_action_sequence
 
         assert temperature > 0, "--temperature must be greater than 0"
 
@@ -251,7 +253,6 @@ class ActionGenerator(nn.Module):
             extended_translation.append(extended_sample)
         return extended_translation
 
-
     def generate_action_sequence(self, translations, net_input=None, post_process=True):
         extended_translations = []
         src_tokens = net_input['src_tokens']
@@ -370,6 +371,100 @@ class ActionGenerator(nn.Module):
         extended_sample['subsets'] = subsets_generated
         return extended_sample
 
+    def fix_oracle_action_sequence(self, sample, dist_index):
+        new_action_sequence = sample['action_seq'][:dist_index]
+        new_sample = sample.copy()
+        eos_index = 2
+        i = sum(new_action_sequence)
+        j = len(new_action_sequence) - i - 1
+
+        trg_Gen = sample['tokens']
+        trg_length = len(trg_Gen)
+        subsets = sample['subsets']
+        src_length = len(subsets)
+
+        if sample['action_seq'][dist_index] == 0 and subsets[j]['tokens'][i] == eos_index:
+            # The distortion is not valid and wee will return None
+            return None
+
+        distorted_action = 1 - sample['action_seq'][dist_index]
+        new_action_sequence.append(distorted_action)   # Add distorted action
+        new_action_sequence.append(-1)   # To mark where distortion happens. Will be used during training.
+        i = i + distorted_action
+        j = j + (1-distorted_action)
+
+        while i < trg_length:
+            subset = subsets[j]['tokens']
+            if i < len(subset) and subset[i] == trg_Gen[i]:
+                new_action_sequence.append(1)
+                i = i + 1
+            elif j + 1 < src_length:
+                if j + 3 == src_length:     # The last two translations are the same
+                    new_action_sequence.append(0)
+                    j = j + 1
+                new_action_sequence.append(0)
+                j = j + 1
+        # Debug
+        if j + 1 < src_length:
+            # print("WARNING --> Some zeros added")
+            while j + 1 < src_length:
+                new_action_sequence.append(0)
+                j = j + 1
+
+        assert (src_length + trg_length == len(new_action_sequence) - 1), \
+            [src_length, trg_length, len(new_action_sequence)-1]
+        new_sample['action_seq'] = new_action_sequence
+        return new_sample
+
+    def distort_oracle_action_sequence(self, samples):
+        distort_rtow = 1
+        distort_wtor = 1
+        distorted_samples = []
+        for index, sample in enumerate(samples):
+            action_seq = torch.tensor(sample['action_seq'])
+            read_idxs = (action_seq == 0).nonzero().squeeze()
+            write_idxs = (action_seq == 1).nonzero().squeeze()
+
+            read_idxs = read_idxs[read_idxs != 0]  # we don't want to distort the first read
+
+            num_distort_rtow = min(distort_rtow, len(read_idxs))
+            num_distort_wtor = min(distort_wtor, len(write_idxs))
+
+            if read_idxs.dim() == 0 or write_idxs.dim() == 0 or len(read_idxs) <= 3 or len(write_idxs) <= 2:
+                # We don't want to distort short sequences.
+                continue
+
+            if num_distort_rtow != 0:
+                distortion_rtow_idxs = read_idxs[
+                    torch.randperm(len(read_idxs))[:num_distort_rtow]
+                ]
+
+                for distortion_idx in distortion_rtow_idxs:
+
+                    if write_idxs[-1] < distortion_idx:
+                        # We don't want to choose a read action after the last write action.
+                        continue
+
+                    distorted = self.fix_oracle_action_sequence(sample, distortion_idx)
+                    if distorted is not None:
+                        distorted['id_index'] = index     # We use it to restore id number.
+                        distorted_samples.append(distorted)
+
+            if num_distort_wtor != 0:
+                distortion_wtor_idxs = write_idxs[
+                    torch.randperm(len(write_idxs))[:num_distort_wtor]
+                ]
+                for distortion_idx in distortion_wtor_idxs:
+                    if read_idxs[-2] < distortion_idx:
+                        # If we have already seen the whole src, then we don't want to read anymore.
+                        continue
+                    distorted = self.fix_oracle_action_sequence(sample, distortion_idx)
+                    if distorted is not None:
+                        distorted['id_index'] = index  # We use it to restore id number.
+                        distorted_samples.append(distorted)
+
+        return distorted_samples
+
     @torch.no_grad()
     def generate(self, models, sample: Dict[str, Dict[str, Tensor]], **kwargs):
         """Generate translations. Match the api of other fairseq generators.
@@ -403,6 +498,10 @@ class ActionGenerator(nn.Module):
 
         if sample['action_seq'] is not None:
             return self.extend_sample(translations, sample)
+        if self.distort_action_sequence:
+            samples_with_oracle = self.generate_action_sequence(translations, sample['net_input'], post_process=False)
+            distorted_samples = self.distort_oracle_action_sequence(samples_with_oracle)
+            return distorted_samples
         return self.generate_action_sequence(translations, sample['net_input'], post_process=False)
 
     def _generate_train(
@@ -1770,17 +1869,17 @@ class SimultaneousGenerator(nn.Module):
                     torch.tensor(-math.inf, dtype=torch.float32, device=device),
                     lprobs[:, self.write].float()
                 )
-                lprobs[:, self.eos] = torch.where(
-                    prior_src_tokens[:, step].eq(self.eos) &
-                    prior_trg_tokens[:, step].eq(self.eos) &
-                    prior_trg_tokens[:, step-1].eq(self.eos),
-                    torch.tensor(math.inf, dtype=torch.float32, device=device),
-                    lprobs[:, self.eos].float()
-                )
+                # lprobs[:, self.eos] = torch.where(
+                #     prior_src_tokens[:, step].eq(self.eos) &
+                #     prior_trg_tokens[:, step].eq(self.eos) &
+                #     prior_trg_tokens[:, step-1].eq(self.eos),
+                #     torch.tensor(math.inf, dtype=torch.float32, device=device),
+                #     lprobs[:, self.eos].float()
+                # )
                 if not all_features:
                     lprobs[:, self.eos] = torch.where(
-                        prior_src_tokens[:, step].eq(self.eos) &
-                        prior_trg_tokens[:, step].eq(self.pad),
+                        prior_trg_tokens[:, step-1].eq(self.eos) &
+                        prior_outputs[:, step-1, -1].eq(self.write),
                         torch.tensor(math.inf, dtype=torch.float32, device=device),
                         lprobs[:, self.eos].float()
                     )

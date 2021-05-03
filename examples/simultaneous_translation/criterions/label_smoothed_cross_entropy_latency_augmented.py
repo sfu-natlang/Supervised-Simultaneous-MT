@@ -5,7 +5,7 @@
 
 from examples.simultaneous_translation.utils.latency import LatencyTraining
 from fairseq.criterions import register_criterion
-from fairseq.criterions.label_smoothed_cross_entropy import (
+from fairseq.criterions.label_smoothed_cross_entropy_1 import (
     LabelSmoothedCrossEntropyCriterion,
 )
 

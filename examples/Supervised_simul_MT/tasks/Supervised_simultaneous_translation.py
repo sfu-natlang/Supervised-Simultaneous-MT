@@ -243,6 +243,8 @@ class SupervisedSimulTranslationTask(TranslationTask):
                                  'NMT translation. Set it to False for inference')
         parser.add_argument('--has-reference-action', action='store_true',
                             help='if True loads reference action sequences in order to use during inference.')
+        parser.add_argument('--distort-action-sequence', action='store_true',
+                            help='if True distort the oracle action sequence.')
         parser.add_argument('--agent-path', metavar="AGTPATH", default=None,
                             help='Path to the fully trained agent model')
         parser.add_argument('--nmt-path', metavar="NMTPATH", default=None,
@@ -400,6 +402,7 @@ class SupervisedSimulTranslationTask(TranslationTask):
             has_target=self.has_target,
             agent_arch=getattr(args, "arch", None),
             teacher_forcing_rate=getattr(args, "mt_teacher_forcing_rate", 1.),
+            distort_action_sequence=getattr(self.args, "distort_action_sequence", False),
             **extra_gen_cls_kwargs,
         )
 
@@ -526,11 +529,12 @@ class SupervisedSimulTranslationTask(TranslationTask):
         model.train()
         model.set_num_updates(update_num)
         with torch.autograd.profiler.record_function("forward"):
-            loss, sample_size, logging_output = criterion(model, sample)
+            loss, sample_size, logging_output = criterion(model, sample, early_update=True) if criterion.early_update \
+                else criterion(model, sample)
         if ignore_grad:
             loss *= 0
         with torch.autograd.profiler.record_function("backward"):
-            optimizer.backward(loss)
+            optimizer.backward(loss) # if loss.dim == 0 else optimizer.backward(loss)
         return loss, sample_size, logging_output
 
     def load_dataset(self, split, epoch=1, combine=False, **kwargs):

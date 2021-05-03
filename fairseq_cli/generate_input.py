@@ -219,6 +219,8 @@ def _main(cfg: DictConfig, output_file):
             inputs['input_act'] = new_target
             return inputs
 
+        if not hypos:
+            continue
         generated_input = agent_utils.prepare_simultaneous_input(hypos, sample, task)
         generated_input = extend_with_src_trg_tokens(generated_input, hypos)
 
@@ -227,21 +229,6 @@ def _main(cfg: DictConfig, output_file):
 
         for i, input_id in enumerate(generated_input["id"].tolist()):
             has_target = generated_input["input_act"] is not None
-
-            # # Remove padding
-            # if "input_src" in generated_input:
-            #     src_tokens = utils.strip_pad(
-            #         generated_input['input_src'][i, :], src_dict.pad()
-            #     )
-            # else:
-            #     src_tokens = None
-            #
-            # if "input_trg" in generated_input:
-            #     trg_tokens = utils.strip_pad(
-            #         generated_input['input_trg'][i, :], tgt_dict.pad()
-            #     )
-            # else:
-            #     trg_tokens = None
 
             action_tokens = None
             if has_target:
@@ -281,8 +268,8 @@ def _main(cfg: DictConfig, output_file):
 
             action_str = " ".join([str(act.item()) for act in action_tokens])
 
-            assert len(src_str.split()) == len(trg_str.split()) and \
-                   len(action_str.split())-1 == len(trg_str.split())
+            #assert len(src_str.split()) == len(trg_str.split()) and \
+            #       len(action_str.split())-1 == len(trg_str.split())
 
             if src_dict is not None:
                 print("S-{}\t{}".format(input_id, src_str), file=output_file)

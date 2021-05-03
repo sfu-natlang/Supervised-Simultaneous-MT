@@ -40,6 +40,7 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
         ignore_prefix_size=0,
         report_accuracy=False,
         report_edit_distance=False,
+        early_update=False
     ):
         super().__init__(task)
         self.sentence_avg = sentence_avg
@@ -47,6 +48,7 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
         self.ignore_prefix_size = ignore_prefix_size
         self.report_accuracy = report_accuracy
         self.report_edit_distance = report_edit_distance
+        self.early_update = early_update
 
     @staticmethod
     def add_args(parser):
@@ -58,12 +60,16 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
                             help='report accuracy metric')
         parser.add_argument('--report-edit-distance', action='store_true',
                             help='report Hamming and Levenshtein distances')
+        parser.add_argument('--early-update', action='store_true',
+                            help='update the loss based the first mistake and ignores the rest of the sequence')
         parser.add_argument('--ignore-prefix-size', default=0, type=int,
                             help='Ignore first N tokens')
         # fmt: on
 
-    def forward(self, model, sample, reduce=True):
+    def forward(self, model, sample, early_update=False, reduce=True):
         """Compute the loss for the given sample.
+
+        We need to passs early_update parameter to make sure we won't apply it during validation
 
         Returns a tuple with three elements:
         1) the loss
@@ -71,15 +77,26 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
         3) logging outputs to display while training
         """
         net_output = model(**sample["net_input"])
-        loss, nll_loss = self.compute_loss(model, net_output, sample, reduce=reduce)
+        bsz, seq_len = sample['target'].size()
+        if early_update:
+            loss, nll_loss = self.compute_loss(model, net_output, sample, reduce=False)
+            top_actions, target = self.get_topk_actions(model, net_output, sample)
+            first_false_idxs = self.find_first_false(top_actions, target, bsz)
+            mask_loss = torch.zeros(bsz, seq_len, device=target.device)
+            for index, first_false in enumerate(first_false_idxs):
+                mask_loss[index, :first_false[0]+1] = (seq_len + 1) / (first_false[0] + 1)
+            loss = loss * mask_loss.view(-1, loss.size(1))
+            loss = loss.sum()/len(mask_loss.nonzero())    # take mean over nonzero elements
+        else:
+            loss, nll_loss = self.compute_loss(model, net_output, sample, reduce=reduce)
         sample_size = (
-            sample["target"].size(0) if self.sentence_avg else sample["ntokens"]
+            bsz if self.sentence_avg else sample["ntokens"]
         )
         logging_output = {
             "loss": loss.data,
-            "nll_loss": nll_loss.data,
+            "nll_loss": nll_loss.sum().data,
             "ntokens": sample["ntokens"],
-            "nsentences": sample["target"].size(0),
+            "nsentences": bsz,
             "sample_size": sample_size,
         }
         if self.report_accuracy:
@@ -90,7 +107,18 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
             top_actions, target = self.get_topk_actions(model, net_output, sample)
             logging_output['hamming'] = self.compute_hamming_distance(top_actions, target)
             logging_output['levenshtein'] = self.compute_levenshtein(top_actions, target)
+            first_false = self.find_first_false(top_actions, target, bsz)
+            logging_output['early_mistake'] = torch.mean(first_false.float())
         return loss, sample_size, logging_output
+
+    def find_first_false(self, top_actions, target, bsz):
+        equality = torch.eq(top_actions, target).view(bsz, -1)
+        # Find the first False in each row.
+        first_false_idxs = torch.argmax(
+            ~equality * torch.arange(equality.shape[1], 0, -1, device=target.device),
+            1, keepdim=True
+        )
+        return first_false_idxs
 
     def get_lprobs_and_target(self, model, net_output, sample):
         lprobs = model.get_normalized_probs(net_output, log_probs=True)
@@ -225,6 +253,11 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
         if levenshtein > 0:
             metrics.log_scalar(
                 'levenshtein', levenshtein / sample_size, sample_size, round=3
+            )
+        early_mistake = sum(log.get("early_mistake", 0) for log in logging_outputs)
+        if early_mistake > 0:
+            metrics.log_scalar(
+                'early_mistake', early_mistake, sample_size, round=3
             )
 
     @staticmethod
