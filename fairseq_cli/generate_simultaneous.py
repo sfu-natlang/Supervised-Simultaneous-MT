@@ -141,6 +141,7 @@ def _main(cfg: DictConfig, output_file):
         if use_cuda and not cfg.distributed_training.pipeline_model_parallel:
             model.cuda()
         model.prepare_for_inference_(cfg)
+        model.decoder.waitk = task.eval_waitk
 
     for model in agent_models:
         if use_cuda and not cfg.distributed_training.pipeline_model_parallel:

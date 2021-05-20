@@ -302,14 +302,14 @@ class ActionGenerator(nn.Module):
                     j = j + 1
                 action_seq.append(0)
                 j = j + 1
-        # Debug
-        if j + 1 < src_length:
-            # print("WARNING --> Some zeros added")
-            while j + 1 < src_length:
-                action_seq.append(0)
-                j = j + 1
+        # # Debug
+        # if j + 1 < src_length:
+        #     # print("WARNING --> Some zeros added")
+        #     while j + 1 < src_length:
+        #         action_seq.append(0)
+        #         j = j + 1
 
-        assert (src_length + trg_length == len(action_seq)), [src_length, trg_length, len(action_seq)]
+        # assert (src_length + trg_length == len(action_seq)), [src_length, trg_length, len(action_seq)]
         extended_sample = sample[-1][0]
         extended_sample['src_tokens'] = src_token
         extended_sample['action_seq'] = action_seq
@@ -383,9 +383,12 @@ class ActionGenerator(nn.Module):
         subsets = sample['subsets']
         src_length = len(subsets)
 
-        if sample['action_seq'][dist_index] == 0 and subsets[j]['tokens'][i] == eos_index:
-            # The distortion is not valid and wee will return None
-            return None
+        if sample['action_seq'][dist_index] == 0:
+            # The distortion is not valid and we will return None
+            if i >= len(subsets[j]['tokens']):
+                return None
+            elif subsets[j]['tokens'][i] == eos_index:
+                return None
 
         distorted_action = 1 - sample['action_seq'][dist_index]
         new_action_sequence.append(distorted_action)   # Add distorted action
@@ -405,14 +408,14 @@ class ActionGenerator(nn.Module):
                 new_action_sequence.append(0)
                 j = j + 1
         # Debug
-        if j + 1 < src_length:
-            # print("WARNING --> Some zeros added")
-            while j + 1 < src_length:
-                new_action_sequence.append(0)
-                j = j + 1
+        # if j + 1 < src_length:
+        #     # print("WARNING --> Some zeros added")
+        #     while j + 1 < src_length:
+        #         new_action_sequence.append(0)
+        #         j = j + 1
 
-        assert (src_length + trg_length == len(new_action_sequence) - 1), \
-            [src_length, trg_length, len(new_action_sequence)-1]
+        # assert (src_length + trg_length == len(new_action_sequence) - 1), \
+        #     [src_length, trg_length, len(new_action_sequence)-1]
         new_sample['action_seq'] = new_action_sequence
         return new_sample
 

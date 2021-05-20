@@ -81,10 +81,11 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
         if early_update:
             loss, nll_loss = self.compute_loss(model, net_output, sample, reduce=False)
             top_actions, target = self.get_topk_actions(model, net_output, sample)
-            first_false_idxs = self.find_first_false(top_actions, target, bsz)
+            #first_false_idxs = self.find_first_false(top_actions, target, bsz)
+            first_written_eos_idxs = self.find_first_eos_write(top_actions, sample)
             mask_loss = torch.zeros(bsz, seq_len, device=target.device)
-            for index, first_false in enumerate(first_false_idxs):
-                mask_loss[index, :first_false[0]+1] = (seq_len + 1) / (first_false[0] + 1)
+            for index, first_eos in enumerate(first_written_eos_idxs):
+                mask_loss[index, :first_eos[0]+1] = 1
             loss = loss * mask_loss.view(-1, loss.size(1))
             loss = loss.sum()/len(mask_loss.nonzero())    # take mean over nonzero elements
         else:
@@ -110,6 +111,19 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
             first_false = self.find_first_false(top_actions, target, bsz)
             logging_output['early_mistake'] = torch.mean(first_false.float())
         return loss, sample_size, logging_output
+
+    def find_first_eos_write(self, top_actions, sample):
+        target_tokens = sample['net_input']['src_tokens'][:, :, 1]
+        bsz, seq_len = target_tokens.size()
+        write_index = self.task.agent_dictionary.indices['1']
+        write_mask = torch.where(top_actions == write_index, 1, 0).view(bsz, -1)  # Only write actions will remain 1.
+        written_tokens = target_tokens * write_mask
+        written_eos_mask = torch.where(written_tokens == 2, 1, 0)
+        written_eos_mask[:, -1] = 1  # to make sure if no eos is written we will update all elements
+        first_written_eos_idxs = torch.argmax(
+            written_eos_mask * torch.arange(seq_len, 0, -1, device=target_tokens.device), 1, keepdim=True
+        )
+        return first_written_eos_idxs
 
     def find_first_false(self, top_actions, target, bsz):
         equality = torch.eq(top_actions, target).view(bsz, -1)
