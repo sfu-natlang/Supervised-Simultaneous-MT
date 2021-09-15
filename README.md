@@ -1,6 +1,6 @@
 # Translation-based Supervision for Policy Generation in Simultaneous Neural Machine Translation
 
-<img src="./oracle.png" width="900" class="center">
+<img src="./oracle.png" width="600" class="center">
 
 You may need to run `pip install --editable .` first.
 
