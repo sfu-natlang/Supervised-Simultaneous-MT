@@ -309,12 +309,12 @@ def _main(cfg: DictConfig, output_file):
                     "If you are using BPE on the target side, the BLEU score is computed on BPE tokens, not on proper words.  Use --sacrebleu for standard 13a BLEU tokenization"
                 )
         # use print to be consistent with other main outputs: S-, H-, T-, D- and so on
-        print(
-            "Generate {} with beam={}: {}".format(
-                cfg.dataset.gen_subset, cfg.generation.beam, scorer.result_string()
-            ),
-            file=output_file,
-        )
+        # print(
+        #     "Generate {} with beam={}: {}".format(
+        #         cfg.dataset.gen_subset, cfg.generation.beam, scorer.result_string()
+        #     ),
+        #     file=output_file,
+        # )
 
     return scorer
 
