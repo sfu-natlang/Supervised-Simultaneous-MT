@@ -5,13 +5,13 @@
 
 # Table of contents
 1. [Installation](#installation)
-2. [Quick start](#Quick start)
+2. [Getting Started](#Getting-Started)
 3. [Citation](#citation)
 
 # Installation
 You may need to run `pip install --editable .` first.
 
-# Quick start
+# Getting Started
 Here is the simplest way to train agent on IWSLT14 dataset for DE -> EN language direction:
 
 ## Generating oracle action sequences
