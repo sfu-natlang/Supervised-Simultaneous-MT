@@ -57,7 +57,7 @@ python preprocess.py
 The data can be prepared to be used in the Supervised training model.
 
 # Citation
-
+```
 @inproceedings{alinejad-etal-2021-translation,
     title = "Translation-based Supervision for Policy Generation in Simultaneous Neural Machine Translation",
     author = "Alinejad, Ashkan  and
@@ -71,3 +71,4 @@ The data can be prepared to be used in the Supervised training model.
     url = "https://aclanthology.org/2021.emnlp-main.130",
     pages = "1734--1744",
 }
+```
