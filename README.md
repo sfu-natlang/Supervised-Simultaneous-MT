@@ -58,4 +58,16 @@ The data can be prepared to be used in the Supervised training model.
 
 # Citation
 
-TBD
+@inproceedings{alinejad-etal-2021-translation,
+    title = "Translation-based Supervision for Policy Generation in Simultaneous Neural Machine Translation",
+    author = "Alinejad, Ashkan  and
+      Shavarani, Hassan S.  and
+      Sarkar, Anoop",
+    booktitle = "Proceedings of the 2021 Conference on Empirical Methods in Natural Language Processing",
+    month = nov,
+    year = "2021",
+    address = "Online and Punta Cana, Dominican Republic",
+    publisher = "Association for Computational Linguistics",
+    url = "https://aclanthology.org/2021.emnlp-main.130",
+    pages = "1734--1744",
+}
